@@ -1,0 +1,9 @@
+services:
+  kormoran:
+    build: .
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    # Override for local runs: docker compose run kormoran kormoran run-mission ...
+    command: kormoran --help
