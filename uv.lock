@@ -2,10 +2,12 @@ version = 1
 revision = 3
 requires-python = ">=3.12"
 resolution-markers = [
-    "python_full_version < '3.15' and sys_platform == 'linux'",
-    "python_version < '0'",
-    "sys_platform != 'linux'",
-    "python_full_version >= '3.15' and sys_platform == 'linux'",
+    "platform_machine != 'arm64' or sys_platform != 'darwin'",
+    "platform_machine == 'arm64' and sys_platform == 'darwin'",
+]
+required-markers = [
+    "platform_machine == 'arm64' and sys_platform == 'darwin'",
+    "platform_machine == 'x86_64' and sys_platform == 'linux'",
 ]
 
 [[package]]
@@ -496,7 +498,8 @@ dependencies = [
     { name = "matplotlib" },
     { name = "numpy" },
     { name = "pillow" },
-    { name = "pybullet" },
+    { name = "pybullet", version = "3.2.7", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'arm64' or sys_platform != 'darwin'" },
+    { name = "pybullet", version = "3.2.7", source = { path = "wheels/pybullet-3.2.7-cp312-cp312-macosx_11_0_arm64.whl" }, marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
     { name = "pytest" },
     { name = "scipy" },
     { name = "setuptools" },
@@ -871,7 +874,8 @@ dependencies = [
     { name = "numpy" },
     { name = "opencv-python-headless" },
     { name = "pillow" },
-    { name = "pybullet" },
+    { name = "pybullet", version = "3.2.7", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'arm64' or sys_platform != 'darwin'" },
+    { name = "pybullet", version = "3.2.7", source = { path = "wheels/pybullet-3.2.7-cp312-cp312-macosx_11_0_arm64.whl" }, marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "python-dotenv" },
@@ -894,7 +898,8 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.24" },
     { name = "opencv-python-headless", specifier = ">=4.8" },
     { name = "pillow", specifier = ">=10.0" },
-    { name = "pybullet", specifier = "==3.2.7" },
+    { name = "pybullet", marker = "platform_machine != 'arm64' or sys_platform != 'darwin'", specifier = "==3.2.7" },
+    { name = "pybullet", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", path = "wheels/pybullet-3.2.7-cp312-cp312-macosx_11_0_arm64.whl" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pydantic-settings", specifier = ">=2.0" },
     { name = "python-dotenv", specifier = ">=1.0" },
@@ -1635,9 +1640,21 @@ wheels = [
 [[package]]
 name = "pybullet"
 version = "3.2.7"
-source = { registry = "wheels" }
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "platform_machine != 'arm64' or sys_platform != 'darwin'",
+]
+sdist = { url = "https://files.pythonhosted.org/packages/de/95/b9a98cd4ed948d4f25a7d0b13cb0c1f87e58dc6d113be9e18940641eb25f/pybullet-3.2.7.tar.gz", hash = "sha256:042879db8d101ac7590dee475fc6aded508b85fe1273fdbbfde1d88bd200e14f", size = 80508379, upload-time = "2025-01-30T00:34:00.527Z" }
+
+[[package]]
+name = "pybullet"
+version = "3.2.7"
+source = { path = "wheels/pybullet-3.2.7-cp312-cp312-macosx_11_0_arm64.whl" }
+resolution-markers = [
+    "platform_machine == 'arm64' and sys_platform == 'darwin'",
+]
 wheels = [
-    { path = "pybullet-3.2.7-cp312-cp312-macosx_11_0_arm64.whl" },
+    { filename = "pybullet-3.2.7-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:ae8eb1959e70823f0a7096114ed500976ba630e23f7e3a3cecbd9d3b68edaf7d" },
 ]
 
 [[package]]
