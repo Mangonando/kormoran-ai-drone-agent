@@ -23,13 +23,13 @@ jobs:
         run: uv sync --frozen
 
       - name: Lint (ruff check)
-        run: uv run ruff check .
+        run: uv run --frozen ruff check .
 
       - name: Format check (ruff format)
-        run: uv run ruff format --check .
+        run: uv run --frozen ruff format --check .
 
       - name: Unit tests
-        run: uv run pytest -m "not llm and not sim" -v
+        run: uv run --frozen pytest -m "not llm and not sim" -v
 
       - name: Build Docker image
         run: docker build -t kormoran:ci .
