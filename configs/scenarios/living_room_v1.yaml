@@ -1,0 +1,38 @@
+scene_id: living_room_v1
+room:
+  x: [-3.0, 3.0]
+  y: [-3.0, 3.0]
+  z: [0.0, 2.5]
+geofence_margin_m: 0.3
+
+obstacles:
+  - shape: box
+    size: [1.2, 0.6, 0.75]
+    pose: [1.0, 0.5, 0.375]   # table
+  - shape: box
+    size: [0.6, 0.6, 0.45]
+    pose: [-1.5, -1.0, 0.225]  # box/chair
+
+targets:
+  - label: red cube
+    shape: cube
+    color: red
+    size: 0.2
+    zone: [[-2.5, 2.5], [-2.5, 2.5], [0.1, 0.1]]
+
+  - label: blue sphere
+    shape: sphere
+    color: blue
+    size: 0.2
+    zone: [[-2.5, 2.5], [-2.5, 2.5], [0.1, 0.1]]
+
+  - label: green cylinder
+    shape: cylinder
+    color: green
+    size: 0.25
+    zone: [[-2.5, 2.5], [-2.5, 2.5], [0.125, 0.125]]
+
+start_pose: [0.0, 0.0, 0.0, 0.0]
+randomize:
+  targets: true
+  seed_from_cli: true

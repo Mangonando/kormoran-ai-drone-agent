@@ -1,0 +1,26 @@
+scene_id: corridor_v1
+room:
+  x: [-1.0, 1.0]
+  y: [-4.0, 4.0]
+  z: [0.0, 2.5]
+geofence_margin_m: 0.3
+
+obstacles: []
+
+targets:
+  - label: red cube
+    shape: cube
+    color: red
+    size: 0.2
+    zone: [[-0.5, 0.5], [-3.5, 3.5], [0.1, 0.1]]
+
+  - label: yellow cube
+    shape: cube
+    color: yellow
+    size: 0.2
+    zone: [[-0.5, 0.5], [-3.5, 3.5], [0.1, 0.1]]
+
+start_pose: [0.0, -3.5, 0.0, 0.0]
+randomize:
+  targets: true
+  seed_from_cli: true

@@ -241,10 +241,10 @@ Build:
 - `cli.py` with `version` and `check-llm` (one cheap OpenRouter round-trip, prints model + tokens; exits non-zero on failure).
 
 Definition of Done:
-- [ ] `uv sync` from clean clone works; `uv run pytest` runs one trivial unit test green.
-- [ ] `uv run pre-commit run --all-files` clean; a commit with a fake `sk-or-...` string is **blocked** by gitleaks.
+- [x] `uv sync` from clean clone works; `uv run pytest` runs one trivial unit test green.
+- [x] `uv run pre-commit run --all-files` clean; a commit with a fake `sk-or-...` string is **blocked** by gitleaks.
 - [ ] CI green on first push (lint, test, docker build).
-- [ ] `uv run kormoran check-llm` succeeds locally with a real key; `tests/llm` skipped without key.
+- [x] `uv run kormoran check-llm` succeeds locally with a real key; `tests/llm` skipped without key.
 
 ### M1 — Simulator bring-up + DroneInterface (≈6 h)
 **Goal:** headless and GUI sim both work; the drone takes off, hovers, lands, and returns camera frames through our interface.
@@ -257,10 +257,10 @@ Build:
 - `recording.py` v0: save frames to a GIF for a run.
 
 Definition of Done:
-- [ ] Unit: `MockDrone` passes an interface-conformance test suite (`tests/unit/test_drone_interface.py`) that will later run against every backend.
-- [ ] Integration (`sim`): takeoff reaches `altitude ± 0.05 m` within timeout; `move_relative(0.5,0,0)` moves ≈0.5 m along body x; `rotate(90)` changes yaw by ≈90°; `get_frame()` returns `uint8 HxWx3` with non-zero variance.
+- [x] Unit: `MockDrone` passes an interface-conformance test suite (`tests/unit/test_drone_interface.py`) that will later run against every backend.
+- [x] Integration (`sim`): takeoff reaches `altitude ± 0.05 m` within timeout; `move_relative(0.5,0,0)` moves ≈0.5 m along body x; `rotate(90)` changes yaw by ≈90°; `get_frame()` returns `uint8 HxWx3` with non-zero variance.
 - [ ] Same integration tests pass **inside Docker** (headless).
-- [ ] `kormoran run-sim-smoke --gui` shows the visible 3D room with coloured objects locally.
+- [x] `kormoran run-sim-smoke --gui` shows the visible 3D room with coloured objects locally.
 
 ### M2 — Deterministic skills + safety supervisor (≈6 h)
 **Goal:** every macro-action the LLM will ever choose exists, is bounded, and is policed.

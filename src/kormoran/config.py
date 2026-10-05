@@ -1,10 +1,13 @@
-"""Settings loaded from environment variables / .env file."""
+"""Settings loaded from environment variables / .env file, plus scenario config models."""
 
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
+from typing import Literal
 
-from pydantic import Field, SecretStr
+import yaml
+from pydantic import BaseModel, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -53,8 +56,67 @@ class Settings(BaseSettings):
     record_missions: bool = Field(True, description="Save JSONL mission log and GIF")
     log_level: str = Field("INFO", description="Python logging level")
 
+    # Scenarios
+    scenarios_dir: str = Field("configs/scenarios", description="Directory of scenario YAML files")
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """Return a cached Settings instance."""
     return Settings()
+
+
+# ---------------------------------------------------------------------------
+# Scenario config models (loaded from YAML, not env vars)
+# ---------------------------------------------------------------------------
+
+
+class ObstacleSpec(BaseModel):
+    """A static obstacle in the scene."""
+
+    shape: Literal["box", "sphere", "cylinder"] = "box"
+    size: list[float]  # box: [lx, ly, lz]; sphere: [r]; cylinder: [r, h]
+    pose: list[float]  # [x, y, z] — world-frame centre
+
+
+class ScenarioTargetSpec(BaseModel):
+    """A target object to be placed (possibly randomised) in the scene."""
+
+    label: str
+    shape: Literal["cube", "sphere", "cylinder"] = "cube"
+    color: str = "red"
+    size: float = Field(0.2, gt=0.0)
+    # zone: [[x_min, x_max], [y_min, y_max], [z_min, z_max]]
+    zone: list[list[float]]
+
+
+class RoomBounds(BaseModel):
+    """Axis-aligned bounding box of the room in metres."""
+
+    x: list[float]  # [min, max]
+    y: list[float]
+    z: list[float]
+
+
+class RandomizeConfig(BaseModel):
+    targets: bool = True
+    seed_from_cli: bool = True
+
+
+class ScenarioConfig(BaseModel):
+    """Full scenario loaded from a YAML file."""
+
+    scene_id: str
+    room: RoomBounds
+    geofence_margin_m: float = 0.3
+    obstacles: list[ObstacleSpec] = []
+    targets: list[ScenarioTargetSpec] = []
+    start_pose: list[float] = Field(default_factory=lambda: [0.0, 0.0, 0.0, 0.0])
+    randomize: RandomizeConfig = Field(default_factory=RandomizeConfig)
+
+    @classmethod
+    def from_yaml(cls, path: str | Path) -> ScenarioConfig:
+        """Load and validate a scenario YAML file."""
+        with open(path) as fh:
+            data = yaml.safe_load(fh)
+        return cls.model_validate(data)

@@ -13,6 +13,13 @@ dependencies = [
     "typer>=0.12",
     "langchain-openai>=0.2",
     "python-dotenv>=1.0",
+    "pybullet==3.2.7",
+    "gym-pybullet-drones @ git+https://github.com/learnsyslab/gym-pybullet-drones@7ebad1ecabd28a7000add2d05f888aa2e837c2cc",
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "Pillow>=10.0",
+    "pyyaml>=6.0",
+    "opencv-python-headless>=4.8",
 ]
 
 [project.scripts]
@@ -28,6 +35,15 @@ dev = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/kormoran"]
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
+# pybullet 3.2.7 does not build from source on macOS arm64 + Xcode ≥21 due to
+# a vendored zutil.h issue. We ship a patched pre-built wheel in wheels/.
+# On Linux (CI / Docker) uv ignores this because the wheel tag doesn't match.
+[tool.uv]
+find-links = ["wheels"]
+
 [tool.ruff]
 src = ["src"]
 target-version = "py312"
@@ -36,7 +52,7 @@ exclude = ["*.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "S", "N", "ANN"]
-ignore = []
+ignore = ["ANN101", "ANN102"]  # self/cls annotations — removed in ruff 0.7+
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S105", "ANN"]
