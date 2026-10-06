@@ -15,6 +15,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "pybullet==3.2.7",
     "gym-pybullet-drones @ git+https://github.com/learnsyslab/gym-pybullet-drones@7ebad1ecabd28a7000add2d05f888aa2e837c2cc",
+    "torch",  # explicit so [tool.uv.sources] can redirect to CPU-only index
     "numpy>=1.24",
     "scipy>=1.10",
     "Pillow>=10.0",
@@ -53,6 +54,16 @@ required-environments = [
 pybullet = [
     { path = "wheels/pybullet-3.2.7-cp312-cp312-macosx_11_0_arm64.whl", marker = "sys_platform == 'darwin' and platform_machine == 'arm64'" },
 ]
+# CPU-only torch: gym-pybullet-drones pulls torch transitively; we never need CUDA
+# (headless sim only). This avoids downloading ~2 GB of Nvidia packages in Docker/CI.
+torch = { index = "pytorch-cpu" }
+torchvision = { index = "pytorch-cpu" }
+torchaudio = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [tool.ruff]
 src = ["src"]
