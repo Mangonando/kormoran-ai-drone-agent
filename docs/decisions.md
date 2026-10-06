@@ -59,3 +59,28 @@ renders the PyBullet plane + coloured objects without a display server.
 
 **VERIFY 4 — `with_structured_output(Action)` (M4):**
 Still open — deferred to M4 when the agent calls the LLM for the first time.
+
+---
+
+## 2026-10-06 — M3: Perception layer
+
+**Context:** HSV-based colour detector for coloured primitives (red/blue/green/yellow × cube/sphere/cylinder).
+
+**Decisions made:**
+- `ColorDetector` is a class implementing the `Perceiver` protocol via `detect(frame, target)`.  HSV
+  ranges are hardcoded constants in `color_detector.py`; changing them is a breaking change (update
+  decisions.md and snapshot tests).  Range floors: S ≥ 90, V ≥ 40 to handle PyBullet Phong shading.
+- Confidence metric = blob solidity × size_factor.  Solidity (contour_area / convex_hull_area) rewards
+  compact blobs; size_factor penalises blobs covering < 0.2 % of the frame so distant/edge detections
+  don't over-state certainty.
+- `ground_truth.py` is pure (no backend imports).  It takes a raw numpy seg mask + label→body_id map;
+  callers (CLI/eval) supply those from `SimDrone.get_seg_frame()`.  Seg mask decoding uses both exact
+  match and `& 0xFFFF` masking to handle PyBullet's link-index encoding for static single-body objects.
+- `summarizer.py` uses deterministic thresholds (small ≤ 3 %, large ≥ 12 %, left/right > ±0.25 cx_norm,
+  high/low > ±0.25 cy_norm).  These are snapshot-tested; any change to the output format requires
+  updating `tests/unit/test_summarizer.py`.
+- `SimDrone.get_seg_frame()` returns `(Frame, seg_mask_int32, label_to_body_id)`.  The method is not
+  part of the `DroneInterface` protocol (eval-only).
+- `eval-detector` CLI command: 1-D grid of x positions × 8 yaws per position.  Default 5 × 8 = 40
+  frames (fast; ~ 3 min in headless sim).  Scale with `--positions 25 --yaws 8` for ~200 frames.
+  Results appended to `docs/eval_results.md`.

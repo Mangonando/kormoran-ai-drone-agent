@@ -151,20 +151,6 @@ def _check_altitude(
 
     clamped_dz = _clamp_delta(pose.z, dz, z_min, z_max)
 
-    if action.kind == "takeoff":
-        # Takeoff altitude in metres, not relative delta.
-        target_alt = max(z_min, min(pose.z + dz, z_max))
-        ev = SafetyEvent(
-            t=t,
-            kind="altitude",
-            action_kind=action.kind,
-            reason=f"takeoff altitude clamped to {target_alt:.2f} m (max {z_max} m)",
-        )
-        events.append(ev)
-        logger.debug("supervisor clamp: %s", ev.reason)
-        new_action = action.model_copy(update={})  # takeoff has no distance_m field
-        return new_action, events
-
     if abs(clamped_dz) < _MIN_CLAMPED_M:
         ev = SafetyEvent(
             t=t,

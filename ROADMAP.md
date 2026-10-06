@@ -285,9 +285,9 @@ Build:
 - Target vocabulary for the graded build: coloured primitives (red/blue/green/yellow × cube/sphere/cylinder). Semantic targets ("blue chair") need a VLM → stretch (M8+).
 
 Definition of Done:
-- [ ] Unit: detector on fixture frames (true positive, empty room, two colours, partial occlusion).
-- [ ] Integration: `kormoran eval-detector` over 200 random sim frames reports precision ≥ 0.95 and recall ≥ 0.90 vs segmentation ground truth; result saved to `docs/eval_results.md`.
-- [ ] Summarizer output is stable (snapshot test).
+- [x] Unit: detector on fixture frames (true positive, empty room, two colours, partial occlusion).
+- [x] Integration: `kormoran eval-detector` over 200 random sim frames reports precision ≥ 0.95 and recall ≥ 0.90 vs segmentation ground truth; result saved to `docs/eval_results.md`.
+- [x] Summarizer output is stable (snapshot test).
 
 ### M4 — Agent core: LangGraph + short-term memory (≈10 h)
 **Goal:** a complete mission loop that finds a target in the sim using the real LLM, with scripted and heuristic planners for tests and baselines.

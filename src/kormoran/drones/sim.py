@@ -85,6 +85,7 @@ class SimDrone:
         self._ctrl: object | None = None  # DSLPIDControl
         self._is_flying: bool = False
         self._connect_time: float = 0.0
+        self._target_ids: dict[str, int] = {}  # populated by connect() via SceneBuilder
 
     # ------------------------------------------------------------------
     # DroneInterface
@@ -124,7 +125,7 @@ class SimDrone:
 
         # Build room + objects inside the existing PyBullet world
         builder = SceneBuilder(self._scenario, self._seed)
-        builder.build(self._env.CLIENT)  # type: ignore[union-attr]
+        self._target_ids = builder.build(self._env.CLIENT)  # type: ignore[union-attr]
 
         self._connect_time = time.monotonic()
         logger.info("SimDrone connected (gui=%s, scene=%s)", self._gui, self._scenario.scene_id)
@@ -202,6 +203,25 @@ class SimDrone:
         rgb: NDArray[np.uint8] = rgba[:, :, :3]
         elapsed = time.monotonic() - self._connect_time
         return Frame(image=rgb, t=elapsed, fov_deg=_IMG_FOV_DEG)
+
+    def get_seg_frame(
+        self,
+    ) -> tuple[Frame, NDArray[np.int32], dict[str, int]]:
+        """Return ``(frame, seg_mask, label_to_body_id)`` for eval / ground-truth use.
+
+        *seg_mask* is H×W int32; each pixel holds the PyBullet body ID (with link bits
+        encoded in the high bytes — see ``perception/ground_truth.py``).
+        *label_to_body_id* maps each target label to its PyBullet body unique ID.
+        """
+        self._require_connected()
+        env = self._env
+        rgba_raw, _, seg_raw = env._getDroneImages(0, segmentation=True)  # type: ignore[union-attr]
+        rgba: NDArray[np.uint8] = np.array(rgba_raw, dtype=np.uint8)
+        rgb: NDArray[np.uint8] = rgba[:, :, :3]
+        seg: NDArray[np.int32] = np.array(seg_raw, dtype=np.int32)
+        elapsed = time.monotonic() - self._connect_time
+        frame = Frame(image=rgb, t=elapsed, fov_deg=_IMG_FOV_DEG)
+        return frame, seg, dict(self._target_ids)
 
     # ------------------------------------------------------------------
     # Internal helpers

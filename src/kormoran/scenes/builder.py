@@ -68,11 +68,6 @@ class SceneBuilder:
 
         return self._target_ids
 
-    @property
-    def target_ids(self) -> dict[str, int]:
-        """Body IDs keyed by target label (valid after ``build()``)."""
-        return dict(self._target_ids)
-
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
