@@ -271,9 +271,9 @@ Build:
 - `safety/supervisor.py` and `safety/battery.py` per §4 table; supervisor is a pure function `check(action, state, config) -> Verdict(allow|clamp|reject, action', reason)` so it is trivially testable.
 
 Definition of Done:
-- [ ] Unit: every supervisor row in §4 has a passing test on `MockDrone`.
-- [ ] Integration (`sim`): each skill reaches its target within tolerance; `scan(8)` yields 8 frames with 8 distinct yaws.
-- [ ] Integration: a scripted "bad" action sequence (fly through wall, climb to 10 m, run until battery 0) ends with the drone landed, status `aborted`, and the expected `SafetyEvent`s — no exceptions escape.
+- [x] Unit: every supervisor row in §4 has a passing test on `MockDrone`.
+- [x] Integration (`sim`): each skill reaches its target within tolerance; `scan(8)` yields 8 frames with 8 distinct yaws.
+- [x] Integration: a scripted "bad" action sequence (fly through wall, climb to 10 m, run until battery 0) ends with the drone landed, status `aborted`, and the expected `SafetyEvent`s — no exceptions escape.
 
 ### M3 — Perception (≈5 h)
 **Goal:** reliable target detection in sim frames, with measured precision/recall.

@@ -91,3 +91,23 @@ class SafetyEvent(BaseModel):
     kind: str  # e.g. "geofence", "altitude", "battery", "watchdog"
     action_kind: str | None = None
     reason: str
+
+
+class ScanResult(BaseModel):
+    """Result of a multi-step scan skill (one frame per angular step)."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    frames: list[Frame]
+    yaws_deg: list[float]  # drone yaw at the moment each frame was captured
+    elapsed_s: float
+    final_pose: Pose
+
+
+class Verdict(BaseModel):
+    """Safety supervisor decision on a proposed action."""
+
+    kind: Literal["allow", "clamp", "reject"]
+    action: Action  # original if allowed, clamped if clamped, land if rejected
+    reason: str
+    events: list[SafetyEvent] = Field(default_factory=list)

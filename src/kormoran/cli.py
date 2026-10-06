@@ -74,7 +74,7 @@ def run_sim_smoke(
     scenario: str = typer.Option("living_room_v1", "--scenario", help="Scenario id"),
     seed: int = typer.Option(1, "--seed", help="Random seed"),
 ) -> None:
-    """Smoke test: load sim, take off, scan (8 rotations), land, save GIF."""
+    """Smoke test: load sim, take off, scan (8 rotations), fly forward/back, land, save GIF."""
     from pathlib import Path
 
     from kormoran.config import get_settings
@@ -112,6 +112,23 @@ def run_sim_smoke(
             frames.append(f)
             state = drone.get_state()
             typer.echo(f"  step {i + 1}/8  yaw={state.pose.yaw_deg:.1f}°  status={result.status}")
+
+        cruise_m = 1.5
+        typer.echo(f"Flying forward {cruise_m} m...")
+        result = drone.move_relative(cruise_m, 0.0, 0.0, timeout_s=15.0)
+        frames.append(drone.get_frame())
+        state = drone.get_state()
+        typer.echo(
+            f"  {result.status}  ({state.pose.x:.2f}, {state.pose.y:.2f}) {result.elapsed_s:.1f}s"
+        )
+
+        typer.echo(f"Flying back {cruise_m} m...")
+        result = drone.move_relative(-cruise_m, 0.0, 0.0, timeout_s=15.0)
+        frames.append(drone.get_frame())
+        state = drone.get_state()
+        typer.echo(
+            f"  {result.status}  ({state.pose.x:.2f}, {state.pose.y:.2f}) {result.elapsed_s:.1f}s"
+        )
 
         typer.echo("Landing...")
         result = drone.land()

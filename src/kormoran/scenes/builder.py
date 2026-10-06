@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
-    from kormoran.config import ScenarioConfig
+    from kormoran.config import ObstacleSpec, ScenarioConfig
 
 logger = logging.getLogger(__name__)
 
@@ -160,11 +160,11 @@ class SceneBuilder:
         )
         return body_id
 
-    def _load_obstacle(self, p: object, client: int, obs: object) -> None:
+    def _load_obstacle(self, p: object, client: int, obs: ObstacleSpec) -> None:
         """Load one obstacle spec into the world."""
-        shape = getattr(obs, "shape", "box")
-        size = getattr(obs, "size", [1.0, 1.0, 1.0])
-        pose = getattr(obs, "pose", [0.0, 0.0, 0.5])
+        shape = obs.shape
+        size = obs.size
+        pose = obs.pose
 
         if shape == "box":
             half = [s / 2.0 for s in size]

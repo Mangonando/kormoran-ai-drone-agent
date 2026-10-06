@@ -50,8 +50,6 @@ class MockDrone:
         Controls which operations fail (see ``FailMode``).
     battery_pct:
         Starting battery level (0–100).
-    seed:
-        Random seed (not currently used, reserved for future stochastic tests).
     move_speed_m_s:
         Simulated movement speed for elapsed-time calculation.
     """
