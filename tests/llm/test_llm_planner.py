@@ -104,9 +104,9 @@ def test_llm_planner_finds_red_cube() -> None:
         print(f"  seed={seed} status={final.get('status')} steps={final.get('step', 0)}")
 
     print(f"\nLLMPlanner living_room_v1: {found_count}/{len(_SEEDS)} seeds found")
-    assert (
-        found_count >= 4
-    ), f"LLMPlanner found target in only {found_count}/{len(_SEEDS)} seeds (need ≥ 4)"
+    assert found_count >= 4, (
+        f"LLMPlanner found target in only {found_count}/{len(_SEEDS)} seeds (need ≥ 4)"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -141,9 +141,9 @@ def test_llm_planner_absent_target_not_found() -> None:
         f"\nLLMPlanner absent_target: {not_found_count}/{len(_SEEDS_ABSENT)} not_found, "
         f"false-found rate={false_found_rate:.0%}"
     )
-    assert (
-        not_found_count >= 2
-    ), f"LLMPlanner not_found in only {not_found_count}/{len(_SEEDS_ABSENT)} seeds (need ≥ 2)"
-    assert (
-        false_found_rate == 0.0
-    ), f"False-found rate {false_found_rate:.0%} is non-zero — LLM hallucinating detections"
+    assert not_found_count >= 2, (
+        f"LLMPlanner not_found in only {not_found_count}/{len(_SEEDS_ABSENT)} seeds (need ≥ 2)"
+    )
+    assert false_found_rate == 0.0, (
+        f"False-found rate {false_found_rate:.0%} is non-zero — LLM hallucinating detections"
+    )
