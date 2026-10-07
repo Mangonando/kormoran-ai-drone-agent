@@ -324,6 +324,9 @@ def run_sim_smoke(
     gui: bool = typer.Option(False, "--gui", help="Show PyBullet GUI"),
     scenario: str = typer.Option("living_room_v1", "--scenario", help="Scenario id"),
     seed: int = typer.Option(1, "--seed", help="Random seed"),
+    pause: bool = typer.Option(
+        False, "--pause", help="Pause after loading the scene (explore GUI before running)"
+    ),
 ) -> None:
     """Smoke test: load sim, take off, scan (8 rotations), fly forward/back, land, save GIF."""
     from kormoran.config import get_settings
@@ -347,6 +350,12 @@ def run_sim_smoke(
     typer.echo(f"Connecting to sim (scene={scenario}, seed={seed}, gui={gui})...")
     drone.connect()
     frames = []
+
+    if pause:
+        typer.echo(
+            "Scene loaded. Explore the PyBullet GUI, then press Enter to run the smoke test..."
+        )
+        input()
 
     try:
         typer.echo("Taking off to 1.0 m...")
