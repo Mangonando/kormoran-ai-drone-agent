@@ -1,12 +1,14 @@
 """Mission recording utilities.
 
 v0 (M1): save a list of ``Frame`` objects to an animated GIF.
-v1 (M4): JSONL mission log added when the full agent loop is implemented.
+v1 (M4): JSONL mission log — one JSON line per step.
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import time
 from pathlib import Path
 
 from PIL import Image
@@ -58,3 +60,41 @@ def save_gif(
     )
     logger.info("Saved %d frames → %s", len(frames), out)
     return out
+
+
+class MissionLogger:
+    """Append-only JSONL log for a single mission (one record per step).
+
+    Parameters
+    ----------
+    log_path:
+        Path to the ``.jsonl`` file.  Parent directory is created on first write.
+    """
+
+    def __init__(self, log_path: Path) -> None:
+        self._path = log_path
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+
+    def log_step(
+        self,
+        step: int,
+        action: dict,
+        result: dict,
+        detections: list[dict],
+        pose: dict,
+        usage: dict,
+        events: list[dict],
+    ) -> None:
+        """Append one step record to the JSONL file."""
+        record = {
+            "step": step,
+            "ts": time.time(),
+            "action": action,
+            "result": result,
+            "detections": detections,
+            "pose": pose,
+            "usage": usage,
+            "safety_events": events,
+        }
+        with self._path.open("a") as fh:
+            fh.write(json.dumps(record) + "\n")

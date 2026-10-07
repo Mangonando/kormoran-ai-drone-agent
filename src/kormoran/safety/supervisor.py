@@ -65,8 +65,9 @@ def check(action: Action, state: DroneState, config: Settings) -> Verdict:
     # ------------------------------------------------------------------
     action, events = _check_spatial(action, state.pose, config, events, state.t)
 
-    # If _check_spatial already converted the action to a reject (land), return.
-    if action.kind == "land" and events:
+    # If _check_spatial replaced the action with a safety fallback, return as reject.
+    # land = hard stop (battery / altitude); rotate = soft reorient (geofence horizontal).
+    if events and action.kind in ("land", "rotate"):
         return Verdict(
             kind="reject",
             action=action,
@@ -88,6 +89,16 @@ def _make_land_action() -> Action:
         kind="land",
         reasoning=_LAND_REASONING,
         confidence=_LAND_CONFIDENCE,
+    )
+
+
+def _make_rotate_action(reason: str) -> Action:
+    """Rotate 90° away from the wall — faster than a full scan and changes heading."""
+    return Action(
+        kind="rotate",
+        angle_deg=90.0,
+        reasoning=f"safety supervisor: {reason} — rotating to find a clear direction",
+        confidence=1.0,
     )
 
 
@@ -216,19 +227,20 @@ def _check_geofence_horizontal(
     clamped_dist = scale * dist
 
     if clamped_dist < _MIN_CLAMPED_M:
+        reason = (
+            f"geofence: move would reach ({x_end:.2f}, {y_end:.2f}) m, "
+            f"outside [{x_min}, {x_max}] × [{y_min}, {y_max}]; "
+            "no safe distance available — rotating to find a clear direction"
+        )
         ev = SafetyEvent(
             t=t,
             kind="geofence",
             action_kind=action.kind,
-            reason=(
-                f"geofence: move would reach ({x_end:.2f}, {y_end:.2f}) m, "
-                f"outside [{x_min}, {x_max}] × [{y_min}, {y_max}]; "
-                "no safe distance available — rejecting"
-            ),
+            reason=reason,
         )
         events.append(ev)
         logger.warning("supervisor reject: %s", ev.reason)
-        return _make_land_action(), events
+        return _make_rotate_action(reason), events
 
     ev = SafetyEvent(
         t=t,

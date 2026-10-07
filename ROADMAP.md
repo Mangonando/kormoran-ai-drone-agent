@@ -300,10 +300,10 @@ Build:
 - `cli.py run-mission --target "red cube" --scenario living_room_v1 --seed 1 --planner llm|heuristic|scripted --gui`.
 
 Definition of Done:
-- [ ] Unit: graph with `ScriptedPlanner` + `MockDrone` reaches `found` on a scripted scene; invalid LLM output (bad enum, out-of-range distance) is re-prompted once then falls back to `scan`; budget exhaustion yields `not_found`; a crash mid-mission can be resumed from the checkpoint and finishes.
+- [x] Unit: graph with `ScriptedPlanner` + `MockDrone` reaches `found` on a scripted scene; invalid LLM output (bad enum, out-of-range distance) is re-prompted once then falls back to `scan`; budget exhaustion yields `not_found`; a crash mid-mission can be resumed from the checkpoint and finishes.
 - [ ] Integration (`sim`): `HeuristicPlanner` finds the red cube in ≥ 8/10 seeds of `living_room_v1` (this is the baseline the LLM must beat or match).
 - [ ] LLM (`llm`, local only): `LLMPlanner` finds the target in ≥ 7/10 seeds; on `absent_target` it reports `not_found` in ≥ 8/10 runs without a false "found". Log model, tokens, cost per mission.
-- [ ] Prompt lives in a versioned file; a change to it requires updating `docs/decisions.md`.
+- [x] Prompt lives in a versioned file (`agent/prompts.py`, `PROMPT_VERSION = "v1"`); a change to it requires updating `docs/decisions.md`.
 
 ### M5 — Long-term memory (≈8 h)
 **Goal:** the agent remembers across missions and gets measurably faster.

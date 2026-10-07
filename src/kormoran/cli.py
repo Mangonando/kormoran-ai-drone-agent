@@ -192,6 +192,133 @@ def eval_detector(
         raise typer.Exit(code=1)
 
 
+@app.command(name="run-mission")
+def run_mission(
+    target: str = typer.Option(..., "--target", help="Target label (e.g. 'red cube')"),
+    scenario: str = typer.Option("living_room_v1", "--scenario", help="Scenario id"),
+    seed: int = typer.Option(1, "--seed", help="Random seed for object placement"),
+    planner_name: str = typer.Option(
+        "heuristic",
+        "--planner",
+        help="Planner: heuristic | scripted | llm",
+    ),
+    gui: bool = typer.Option(False, "--gui", help="Show PyBullet GUI"),
+    max_steps: int = typer.Option(50, "--max-steps", help="Max decision steps"),
+) -> None:
+    """Run a full LangGraph mission loop in the simulator."""
+    import time
+
+    from kormoran.agent.graph import build_mission_graph, make_initial_state, new_mission_id
+    from kormoran.agent.planners import HeuristicPlanner, ScriptedPlanner
+    from kormoran.config import ScenarioConfig, get_settings
+    from kormoran.drones.sim import SimDrone
+    from kormoran.perception.color_detector import ColorDetector
+    from kormoran.recording import MissionLogger
+    from kormoran.types import TargetSpec
+
+    settings = get_settings()
+    _configure_logging(settings.log_level)
+
+    scenarios_dir = Path(settings.scenarios_dir)
+    scenario_path = scenarios_dir / f"{scenario}.yaml"
+    if not scenario_path.exists():
+        typer.echo(f"Error: scenario file not found: {scenario_path}", err=True)
+        raise typer.Exit(code=1)
+
+    scene = ScenarioConfig.from_yaml(scenario_path)
+    target_spec: TargetSpec | None = None
+    for t in scene.targets:
+        if t.label == target:
+            target_spec = TargetSpec(label=t.label, color=t.color, shape=t.shape)
+            break
+    if target_spec is None:
+        typer.echo(f"Error: label {target!r} not in scenario {scenario!r}", err=True)
+        raise typer.Exit(code=1)
+
+    # Build planner.
+    if planner_name == "heuristic":
+        planner = HeuristicPlanner()
+    elif planner_name == "scripted":
+        from kormoran.types import Action
+
+        planner = ScriptedPlanner(
+            [
+                Action(kind="scan", reasoning="scripted scan", confidence=1.0),
+                Action(
+                    kind="report_not_found",
+                    reasoning="scripted end",
+                    confidence=1.0,
+                ),
+            ]
+        )
+    elif planner_name == "llm":
+        from kormoran.agent.llm import make_llm
+        from kormoran.agent.planners import LLMPlanner
+
+        if settings.openrouter_api_key is None:
+            typer.echo("Error: OPENROUTER_API_KEY required for llm planner", err=True)
+            raise typer.Exit(code=1)
+        planner = LLMPlanner(make_llm(settings))
+    else:
+        typer.echo(f"Error: unknown planner {planner_name!r}", err=True)
+        raise typer.Exit(code=1)
+
+    drone = SimDrone(scenario=scene, gui=gui, seed=seed)
+    perceiver = ColorDetector()
+    mission_id = new_mission_id()
+
+    typer.echo(
+        f"run-mission: id={mission_id} target={target!r} scenario={scenario}"
+        f" planner={planner_name} seed={seed}"
+    )
+
+    drone.connect()
+    try:
+        drone.takeoff(altitude_m=1.0)
+        drone_state = drone.get_state()
+
+        # Set up optional JSONL log before building the graph so the logger
+        # is injected into act_node via closure.
+        log_path = Path(settings.data_dir) / "missions" / f"{mission_id}.jsonl"
+        mission_logger: MissionLogger | None = None
+        if settings.record_missions:
+            mission_logger = MissionLogger(log_path)
+
+        graph = build_mission_graph(
+            drone, planner, perceiver, settings, mission_logger=mission_logger
+        )
+        initial = make_initial_state(
+            mission_id, scene.scene_id, target_spec, drone_state, max_steps
+        )
+
+        t0 = time.monotonic()
+        thread_config = {"configurable": {"thread_id": mission_id}}
+        final_state = graph.invoke(initial, config=thread_config)
+        elapsed = time.monotonic() - t0
+
+        status = final_state.get("status", "unknown")
+        steps = final_state.get("step", 0)
+        usage = final_state.get("usage", {})
+
+        typer.echo(f"\nMission complete in {elapsed:.1f}s ({steps} steps)")
+        typer.echo(f"  Status   : {status}")
+        typer.echo(f"  LLM calls: {usage.get('llm_calls', 0)}")
+        typer.echo(f"  Est. cost: ${usage.get('est_cost_usd', 0.0):.4f}")
+
+        if mission_logger is not None:
+            typer.echo(f"  Log      : {log_path}")
+
+        if status not in ("found",):
+            raise typer.Exit(code=1)
+
+    finally:
+        try:
+            drone.land()
+        except Exception:  # noqa: BLE001, S110
+            pass
+        drone.disconnect()
+
+
 @app.command(name="run-sim-smoke")
 def run_sim_smoke(
     gui: bool = typer.Option(False, "--gui", help="Show PyBullet GUI"),
