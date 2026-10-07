@@ -371,22 +371,35 @@ def run_sim_smoke(
             state = drone.get_state()
             typer.echo(f"  step {i + 1}/8  yaw={state.pose.yaw_deg:.1f}°  status={result.status}")
 
-        cruise_m = 1.5
-        typer.echo(f"Flying forward {cruise_m} m...")
-        result = drone.move_relative(cruise_m, 0.0, 0.0, timeout_s=15.0)
-        frames.append(drone.get_frame())
-        state = drone.get_state()
-        typer.echo(
-            f"  {result.status}  ({state.pose.x:.2f}, {state.pose.y:.2f}) {result.elapsed_s:.1f}s"
-        )
+        cruise_m = 0.8
+        for label, dx, dy in [
+            ("forward", cruise_m, 0.0),
+            ("right", 0.0, -cruise_m),
+            ("forward", cruise_m, 0.0),
+            ("left", 0.0, cruise_m),
+            ("back", -cruise_m, 0.0),
+            ("left", 0.0, cruise_m),
+            ("back", -cruise_m, 0.0),
+            ("right", 0.0, -cruise_m),
+        ]:
+            typer.echo(f"Flying {label} {cruise_m} m...")
+            result = drone.move_relative(dx, dy, 0.0, timeout_s=15.0)
+            frames.append(drone.get_frame())
+            state = drone.get_state()
+            pos = f"({state.pose.x:.2f}, {state.pose.y:.2f})"
+            typer.echo(f"  {result.status}  {pos} {result.elapsed_s:.1f}s")
 
-        typer.echo(f"Flying back {cruise_m} m...")
-        result = drone.move_relative(-cruise_m, 0.0, 0.0, timeout_s=15.0)
+        typer.echo("Climbing to 1.8 m...")
+        result = drone.move_relative(0.0, 0.0, 0.8, timeout_s=10.0)
         frames.append(drone.get_frame())
-        state = drone.get_state()
-        typer.echo(
-            f"  {result.status}  ({state.pose.x:.2f}, {state.pose.y:.2f}) {result.elapsed_s:.1f}s"
-        )
+        typer.echo(f"  {result.status}  z={drone.get_state().pose.z:.2f} m")
+
+        typer.echo("Scanning high (8 × 45°)...")
+        for i in range(8):
+            result = drone.rotate(yaw_deg=45.0, timeout_s=8.0)
+            frames.append(drone.get_frame())
+            state = drone.get_state()
+            typer.echo(f"  step {i + 1}/8  yaw={state.pose.yaw_deg:.1f}°  status={result.status}")
 
         typer.echo("Landing...")
         result = drone.land()
@@ -394,6 +407,9 @@ def run_sim_smoke(
         frames.append(drone.get_frame())
 
     finally:
+        if pause:
+            typer.echo("Flight done. Explore the GUI, then press Enter to close...")
+            input()
         drone.disconnect()
 
     # Save GIF

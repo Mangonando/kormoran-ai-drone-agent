@@ -86,6 +86,7 @@ class SimDrone:
         self._is_flying: bool = False
         self._connect_time: float = 0.0
         self._target_ids: dict[str, int] = {}  # populated by connect() via SceneBuilder
+        self._marker_id: int | None = None  # GUI-only visual marker to make the drone visible
 
     # ------------------------------------------------------------------
     # DroneInterface
@@ -126,6 +127,24 @@ class SimDrone:
         # Build room + objects inside the existing PyBullet world
         builder = SceneBuilder(self._scenario, self._seed)
         self._target_ids = builder.build(self._env.CLIENT)  # type: ignore[union-attr]
+
+        # GUI-only: attach a large bright-orange sphere so the drone is easy to spot
+        if self._gui:
+            import pybullet as p
+
+            vis_id = p.createVisualShape(
+                shapeType=p.GEOM_SPHERE,
+                radius=0.3,
+                rgbaColor=[1.0, 0.5, 0.0, 0.9],
+                physicsClientId=self._env.CLIENT,  # type: ignore[union-attr]
+            )
+            self._marker_id = p.createMultiBody(
+                baseMass=0,
+                baseCollisionShapeIndex=-1,
+                baseVisualShapeIndex=vis_id,
+                basePosition=[sp[0], sp[1], 0.35],
+                physicsClientId=self._env.CLIENT,  # type: ignore[union-attr]
+            )
 
         self._connect_time = time.monotonic()
         logger.info("SimDrone connected (gui=%s, scene=%s)", self._gui, self._scenario.scene_id)
@@ -245,6 +264,17 @@ class SimDrone:
             target_rpy=target_rpy,
         )
         self._env.step(np.array([rpm]))  # type: ignore[union-attr]
+
+        if self._marker_id is not None:
+            import pybullet as p
+
+            s = self._get_state_vec()
+            p.resetBasePositionAndOrientation(
+                self._marker_id,
+                [s[0], s[1], s[2]],
+                [0.0, 0.0, 0.0, 1.0],
+                physicsClientId=self._env.CLIENT,  # type: ignore[union-attr]
+            )
 
     def _fly_to(
         self,

@@ -1,0 +1,138 @@
+scene_id: penthouse_v1
+# 200 m² I-shaped penthouse — six progressively harder targets in a labyrinth.
+# The I-shape is formed by two corner blocks that close off the sides of the corridor,
+# forcing the drone through a narrow 4 m-wide central corridor between the two wings.
+# All labyrinth walls are 2.8 m tall — above the drone geofence ceiling (2.2 m) so the
+# drone cannot fly over them.  It must find and navigate through every gap.
+#
+# ┌─────────────────────────────────────┐  y=8.5
+# │    NORTH WING  (15 × 6 m = 90 m²)  │
+# │  [⑥orange]  gap②  [⑤red cyl]      │
+# │  NW room←wall-N2─┤  ├─wall-N3─┤   │
+# │              [④grey]              │
+# │             ←wall-N1 split x=0    │
+# ├──────────────┐         ┌───────────┤  y=2.5
+# │ west block   │CORRIDOR │ east block│
+# │              │[①blue] │           │  corridor 4×5 m = 20 m²
+# │              │ START ↑ │           │
+# ├──────────────┘         └───────────┤  y=-2.5
+# │    SOUTH WING  (15 × 6 m = 90 m²) │
+# │         wall-S1─┤  SE room         │
+# │  [②yel. cyl]  gap①  ├─wall-S2    │
+# │  west sub-room      [③red cube]   │
+# └─────────────────────────────────────┘  y=-8.5
+#  x=-7.5                             x=7.5
+#
+# Labyrinth paths (left/right decisions required):
+#   ①  blue sphere   : corridor, immediately visible from start
+#   ②  yellow cyl.   : south wing — go south, turn LEFT, find south gap below wall-S1,
+#                       enter west sub-room
+#   ③  red cube      : south wing — go south, turn RIGHT (east), find west gap in wall-S2,
+#                       enter SE sub-room (different direction than target ②)
+#   ④  grey cube     : north wing — traverse corridor north, enter east half past wall-N1
+#   ⑤  red cylinder  : north wing east half — find west gap in wall-N3, continue north-east
+#   ⑥  orange sphere : north wing west half — cross wall-N1 gap going west, navigate wall-N2
+#                       east gap, enter NW room (most steps, hardest)
+#
+# DEAD END: entering north wing west half (x < 0, y > 3.5) with no target visible
+# until wall-N2 is crossed at y = 6 — drone must recognise dead end and find the gap.
+#
+# Geofence note: default Settings geofence (±2.7 m XY) is too small for this room.
+# Run with environment overrides:
+#   GEOFENCE_X_MIN=-7.2 GEOFENCE_X_MAX=7.2 GEOFENCE_Y_MIN=-8.2 GEOFENCE_Y_MAX=8.2
+# (per-scenario geofence override will be wired in M5)
+#
+# Budget note: missions targeting ⑤ or ⑥ may need MAX_STEPS=80 or higher.
+
+room:
+  x: [-7.5, 7.5]
+  y: [-8.5, 8.5]
+  z: [0.0, 3.0]
+geofence_margin_m: 0.3
+
+obstacles:
+  # ── I-shape structural blocks ─────────────────────────────────────────────
+  # Fill the two rectangular cut-outs beside the corridor so the drone cannot
+  # bypass the corridor by flying wide left or right.
+
+  - shape: box   # west mid-block: fills x=[-7.5,-2.0], y=[-2.5,2.5]
+    size: [5.5, 5.0, 2.8]
+    pose: [-4.75, 0.0, 1.4]
+
+  - shape: box   # east mid-block: fills x=[2.0,7.5], y=[-2.5,2.5]
+    size: [5.5, 5.0, 2.8]
+    pose: [4.75, 0.0, 1.4]
+
+  # ── South wing labyrinth walls ────────────────────────────────────────────
+
+  - shape: box   # wall-S1: NS wall at x=-2.0, y=[-7.5,-2.5] — gap at SOUTH y=[-8.5,-7.5]
+    size: [0.15, 5.0, 2.8]   # flush with east face of west corner block — no bypass gap
+    pose: [-2.0, -5.0, 1.4]  # drone must go south past y=-7.5 to enter west sub-room
+
+  - shape: box   # wall-S2: EW wall at y=-6.0, x=[0.5,7.5] — gap at WEST x=[-7.5,0.5]
+    size: [7.0, 0.15, 2.8]   # seals off SE sub-room from the north
+    pose: [4.0, -6.0, 1.4]   # drone must go around west end to enter SE sub-room
+
+  # ── North wing labyrinth walls ────────────────────────────────────────────
+
+  - shape: box   # wall-N1: NS full split at x=0, y=[3.5,8.5] — gap at SOUTH y=[2.5,3.5]
+    size: [0.15, 5.0, 2.8]   # commits drone to east half (x>0) or west half (x<0)
+    pose: [0.0, 6.0, 1.4]    # decision must be made in the 1 m entry gap
+
+  - shape: box   # wall-N2: EW wall at y=6.0, x=[-7.5,-2.0] — gap at EAST x=[-2.0,0.0]
+    size: [5.5, 0.15, 2.8]   # seals NW room from near-west dead-end zone
+    pose: [-4.75, 6.0, 1.4]  # drone must navigate east gap to enter NW room
+
+  - shape: box   # wall-N3: EW wall at y=5.5, x=[1.5,7.5] — gap at WEST x=[0.0,1.5]
+    size: [6.0, 0.15, 2.8]   # seals far-NE zone; drone must find west gap
+    pose: [4.5, 5.5, 1.4]
+
+targets:
+  # ① easiest — in the corridor, visible from start with one scan
+  - label: blue sphere
+    shape: sphere
+    color: blue
+    size: 0.2
+    zone: [[-1.5, 1.5], [-2.0, 1.5], [0.4, 0.4]]
+
+  # ② medium — south wing west sub-room; requires south gap passage around wall-S1
+  - label: yellow cylinder
+    shape: cylinder
+    color: yellow
+    size: 0.25
+    zone: [[-7.0, -2.3], [-8.0, -4.0], [0.5, 0.5]]
+
+  # ③ medium-hard — south wing SE sub-room; requires west gap passage around wall-S2
+  #    different direction from ② — agent must backtrack and try right instead of left
+  - label: red cube
+    shape: cube
+    color: red
+    size: 0.2
+    zone: [[1.0, 7.0], [-8.0, -6.5], [0.7, 0.7]]
+
+  # ④ hard — north wing east half; requires corridor traverse and correct east/west choice
+  - label: grey cube
+    shape: cube
+    color: grey
+    size: 0.2
+    zone: [[0.5, 6.5], [3.5, 5.0], [0.5, 0.5]]
+
+  # ⑤ harder — north wing far-east; requires wall-N3 gap navigation after ④ zone
+  - label: red cylinder
+    shape: cylinder
+    color: red
+    size: 0.25
+    zone: [[2.5, 7.0], [6.0, 8.0], [0.6, 0.6]]
+
+  # ⑥ hardest — north wing NW room; drone must choose WEST at wall-N1, cross dead-end
+  #    zone, find wall-N2 east gap, enter NW room — longest path, highest memory value
+  - label: orange sphere
+    shape: sphere
+    color: orange
+    size: 0.2
+    zone: [[-7.0, -2.5], [6.5, 8.2], [0.8, 0.8]]
+
+start_pose: [0.0, 0.0, 0.0, 0.0]   # corridor centre — safe for smoke tests; agent explores both wings from here
+randomize:
+  targets: true
+  seed_from_cli: true
