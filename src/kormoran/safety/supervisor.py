@@ -222,6 +222,31 @@ def _check_geofence_horizontal(
     if x_min <= x_end <= x_max and y_min <= y_end <= y_max:
         return action, events
 
+    # Special case: drone already drifted outside the geofence (scan/rotate can
+    # cause small physical displacements the supervisor cannot intercept).
+    # Only reject moves that push *further* outside; allow anything neutral or
+    # inward so the drone can recover without being trapped by the scale formula.
+    already_outside = not (x_min <= pose.x <= x_max and y_min <= pose.y <= y_max)
+    if already_outside:
+        makes_worse = (
+            (pose.x < x_min and dx_w < 0)
+            or (pose.x > x_max and dx_w > 0)
+            or (pose.y < y_min and dy_w < 0)
+            or (pose.y > y_max and dy_w > 0)
+        )
+        if not makes_worse:
+            # Allow the move — it doesn't worsen the boundary violation.
+            return action, events
+        # Move pushes further outside → reject and rotate.
+        reason = (
+            f"geofence: drone at ({pose.x:.2f}, {pose.y:.2f}) already outside "
+            f"[{x_min}, {x_max}] × [{y_min}, {y_max}]; move would worsen it"
+        )
+        ev = SafetyEvent(t=t, kind="geofence", action_kind=action.kind, reason=reason)
+        events.append(ev)
+        logger.warning("supervisor reject: %s", ev.reason)
+        return _make_rotate_action(reason), events
+
     # Compute maximum fraction of the move that keeps the drone inside.
     scale = _max_scale_2d(pose.x, pose.y, dx_w, dy_w, x_min, x_max, y_min, y_max)
     clamped_dist = scale * dist

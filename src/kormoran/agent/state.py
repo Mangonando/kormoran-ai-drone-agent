@@ -20,7 +20,7 @@ FOUND_AREA_FRAC: float = 0.003
 FOUND_CENTER_TOL: float = 0.6
 
 #: Number of consecutive frames with a qualifying detection to declare found.
-FOUND_CONSECUTIVE: int = 1
+FOUND_CONSECUTIVE: int = 2
 
 #: Grid cell size in metres for visited-cell tracking.
 GRID_CELL_SIZE_M: float = 0.5

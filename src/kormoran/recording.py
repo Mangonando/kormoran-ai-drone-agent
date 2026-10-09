@@ -22,6 +22,8 @@ def save_gif(
     frames: list[Frame],
     path: str | Path,
     fps: int = 12,
+    scale: int = 1,
+    loop: int = 0,
 ) -> Path:
     """Save *frames* to an animated GIF at *path*.
 
@@ -33,11 +35,10 @@ def save_gif(
         Output file path.  Parent directory is created if it does not exist.
     fps:
         Frames per second in the output GIF.
-
-    Returns
-    -------
-    Path
-        Resolved path of the written file.
+    scale:
+        Integer upscale factor (nearest-neighbour).  Use 4 to turn 128×96 into 512×384.
+    loop:
+        GIF loop count: 0 = infinite, 1 = play once.
     """
     if not frames:
         msg = "save_gif: frames list is empty"
@@ -47,6 +48,10 @@ def save_gif(
     out.parent.mkdir(parents=True, exist_ok=True)
 
     pil_frames = [Image.fromarray(f.image, mode="RGB") for f in frames]
+    if scale > 1:
+        w, h = pil_frames[0].size
+        pil_frames = [f.resize((w * scale, h * scale), Image.NEAREST) for f in pil_frames]
+
     duration_ms = int(1000 / fps)
 
     pil_frames[0].save(
@@ -55,7 +60,7 @@ def save_gif(
         save_all=True,
         append_images=pil_frames[1:],
         duration=duration_ms,
-        loop=0,
+        loop=loop,
         optimize=False,
     )
     logger.info("Saved %d frames → %s", len(frames), out)
@@ -74,6 +79,11 @@ class MissionLogger:
     def __init__(self, log_path: Path) -> None:
         self._path = log_path
         self._path.parent.mkdir(parents=True, exist_ok=True)
+        self.frames: list[Frame] = []
+
+    def add_frame(self, frame: Frame) -> None:
+        """Collect a frame for GIF export at mission end."""
+        self.frames.append(frame)
 
     def log_step(
         self,

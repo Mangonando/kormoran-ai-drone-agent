@@ -14,6 +14,7 @@ The executor keeps a running ``safety_events`` log so callers (the agent's
 from __future__ import annotations
 
 import logging
+import math
 import threading
 from collections.abc import Callable
 from typing import TYPE_CHECKING
@@ -26,6 +27,7 @@ from kormoran.types import (
     Detection,
     DroneState,
     MoveResult,
+    Pose,
     SafetyEvent,
     ScanResult,
     Verdict,
@@ -103,11 +105,55 @@ class SkillExecutor:
                 verdict.reason,
             )
 
-        return self._dispatch(effective, detection)
+        result = self._dispatch(effective, detection)
+
+        # Drift recovery: scan and rotate can cause small physical displacements
+        # that push the drone through the geofence margin into the physical wall.
+        # If that happened, silently fly back inside before returning so the next
+        # perceive_node sees a valid, flyable position.
+        current_pose = self._drone.get_state().pose
+        self._recover_from_drift(current_pose)
+
+        return result
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    #: Inward buffer from the geofence edge used as the recovery target.
+    _RECOVERY_BUFFER_M: float = 0.2
+
+    def _recover_from_drift(self, pose: Pose) -> None:  # noqa: ANN001
+        """If *pose* is outside the geofence, fly back to the nearest in-bounds point."""
+        cfg = self._config
+        x, y = pose.x, pose.y
+
+        in_x = cfg.geofence_x_min <= x <= cfg.geofence_x_max
+        in_y = cfg.geofence_y_min <= y <= cfg.geofence_y_max
+        if in_x and in_y:
+            return
+
+        buf = self._RECOVERY_BUFFER_M
+        tx = max(cfg.geofence_x_min + buf, min(cfg.geofence_x_max - buf, x))
+        ty = max(cfg.geofence_y_min + buf, min(cfg.geofence_y_max - buf, y))
+        dx_w, dy_w = tx - x, ty - y
+
+        if abs(dx_w) < 0.05 and abs(dy_w) < 0.05:
+            return  # close enough — skip to avoid oscillation
+
+        yaw_rad = math.radians(pose.yaw_deg)
+        cos_y, sin_y = math.cos(yaw_rad), math.sin(yaw_rad)
+        dx_b = dx_w * cos_y + dy_w * sin_y
+        dy_b = -dx_w * sin_y + dy_w * cos_y
+
+        logger.info(
+            "executor: drift recovery (%.2f, %.2f) → (%.2f, %.2f)",
+            x,
+            y,
+            tx,
+            ty,
+        )
+        self._drone.move_relative(dx_b, dy_b, 0.0, timeout_s=5.0)
 
     def _dispatch(
         self,

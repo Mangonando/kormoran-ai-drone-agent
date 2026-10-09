@@ -8,7 +8,6 @@ the only place that knows about backends.
 from __future__ import annotations
 
 import logging
-import math
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -46,9 +45,12 @@ def _best_detection(detections: list[Detection]) -> Detection | None:
 
 
 def _cell_from_pose(x: float, y: float) -> GridCell:
+    # Use round() instead of floor() so sub-millimetre PID drift at cell boundaries
+    # (e.g. x = -0.0001 after a scan at the origin) does not falsely record the
+    # adjacent cell and corrupt the coverage quadrant counts.
     return GridCell(
-        x_idx=int(math.floor(x / GRID_CELL_SIZE_M)),
-        y_idx=int(math.floor(y / GRID_CELL_SIZE_M)),
+        x_idx=int(round(x / GRID_CELL_SIZE_M)),
+        y_idx=int(round(y / GRID_CELL_SIZE_M)),
     )
 
 
@@ -72,6 +74,7 @@ def make_recall_memory_node() -> Callable[[MissionState], dict]:
 def make_perceive_node(
     drone: DroneInterface,
     perceiver: Perceiver,
+    mission_logger: MissionLogger | None = None,
 ) -> Callable[[MissionState], dict]:
     def perceive_node(state: MissionState) -> dict:
         from kormoran.perception.summarizer import summarize
@@ -79,6 +82,8 @@ def make_perceive_node(
 
         target = TargetSpec.model_validate(state["target"])
         frame = drone.get_frame()
+        if mission_logger is not None:
+            mission_logger.add_frame(frame)
         detections = perceiver.detect(frame, target)
         observation = summarize(detections, target)
         drone_state: DroneState = drone.get_state()
@@ -97,7 +102,7 @@ def make_perceive_node(
 # ---------------------------------------------------------------------------
 
 
-def make_plan_node(planner: object) -> Callable[[MissionState], dict]:
+def make_plan_node(planner: object, config: Settings) -> Callable[[MissionState], dict]:
     def plan_node(state: MissionState) -> dict:
         from kormoran.agent.planners import PlanContext
         from kormoran.types import SafetyEvent, TargetSpec
@@ -118,6 +123,11 @@ def make_plan_node(planner: object) -> Callable[[MissionState], dict]:
             recent_steps=list(state["recent_steps"]),
             recalled=list(state["recalled"]),
             safety_events=safety_events,
+            visited=list(state["visited"]),
+            geofence_x_min=config.geofence_x_min,
+            geofence_x_max=config.geofence_x_max,
+            geofence_y_min=config.geofence_y_min,
+            geofence_y_max=config.geofence_y_max,
         )
 
         try:
@@ -318,11 +328,16 @@ def make_check_node() -> Callable[[MissionState], dict]:
             return {"status": "not_found"}
         if action_kind == "land":
             # Safety-forced land (supervisor reject) → aborted.
-            # Voluntary land chosen by the LLM → found.
             if state.get("last_verdict_kind") == "reject":
                 logger.warning("check_node: supervisor-forced landing → aborted")
                 return {"status": "aborted"}
-            return {"status": "found"}
+            # Voluntary land: only counts as found if the drone had a qualifying
+            # detection in the previous step (consecutive_found > 0).  Landing
+            # without a confirmed sighting is treated as not_found.
+            if state.get("consecutive_found", 0) > 0:
+                return {"status": "found"}
+            logger.info("check_node: LLM landed without prior detection → not_found")
+            return {"status": "not_found"}
 
         # Budget exhausted.
         if step >= max_steps:

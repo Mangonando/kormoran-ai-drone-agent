@@ -162,6 +162,7 @@ def test_invalid_llm_output_falls_back_to_scan() -> None:
         recent_steps=[],
         recalled=[],
         safety_events=[],
+        visited=[],
     )
     result = planner.plan(ctx)
     assert result.kind == "scan", f"expected fallback kind='scan', got {result.kind!r}"

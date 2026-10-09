@@ -9,11 +9,12 @@ Three planners are provided:
 from __future__ import annotations
 
 import logging
+import math
 
 from pydantic import BaseModel
 
 from kormoran.agent.prompts import SYSTEM_PROMPT
-from kormoran.types import Action, Detection, DroneState, SafetyEvent, TargetSpec
+from kormoran.types import Action, Detection, DroneState, Pose, SafetyEvent, TargetSpec
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,12 @@ class PlanContext(BaseModel):
     recent_steps: list[dict]
     recalled: list[dict]
     safety_events: list[SafetyEvent]
+    visited: list[dict]  # list of GridCell dicts {x_idx, y_idx}
+    # Geofence bounds — used by burst direction selection to avoid heading into walls.
+    geofence_x_min: float = -10.0
+    geofence_x_max: float = 10.0
+    geofence_y_min: float = -10.0
+    geofence_y_max: float = 10.0
 
 
 # ---------------------------------------------------------------------------
@@ -182,14 +189,128 @@ class LLMPlanner:
     def __init__(self, llm: object) -> None:
         self._llm = llm  # ChatOpenAI instance
         self.last_token_usage: dict = {}
+        self._last_geo_count: int = 0  # total geofence events seen at end of last plan()
+        self._consecutive_geo: int = 0  # new geofence events since last clear step
+        self._committed_advances: int = 0  # forced advance burst remaining steps
+        self._burst_target_yaw: float | None = None  # heading the burst must face
 
     def plan(self, ctx: PlanContext) -> Action:
+        # Track NEW geofence events since the last plan() call (not accumulated total).
+        current_geo_count = sum(1 for e in ctx.safety_events if e.kind == "geofence")
+        new_geo = current_geo_count - self._last_geo_count
+        if new_geo > 0:
+            self._consecutive_geo += new_geo
+        else:
+            self._consecutive_geo = 0
+        self._last_geo_count = current_geo_count
+
+        # Hard override: detection visible — always approach, never let the LLM rotate away.
+        if ctx.detections:
+            best = max(ctx.detections, key=lambda d: d.confidence * d.area_frac)
+            self._committed_advances = 0
+            self._burst_target_yaw = None
+            self.last_token_usage = {}
+            return Action(
+                kind="approach",
+                distance_m=0.3,
+                reasoning=f"detection {best.label!r} visible — approaching immediately",
+                confidence=0.95,
+            )
+
         # Mandatory periodic scan: don't rely on the LLM following prompt rules.
         if ctx.step > 0 and ctx.step % _SCAN_INTERVAL == 0 and not ctx.detections:
             self.last_token_usage = {}
             return Action(
                 kind="scan",
                 reasoning=f"periodic survey scan at step {ctx.step}",
+                confidence=1.0,
+            )
+
+        # Consecutive rejection guard: if 2+ new geofence rejections in a row,
+        # force a large rotation, abort any active burst, and reset the counter.
+        if self._consecutive_geo >= 2:
+            self._consecutive_geo = 0
+            self._committed_advances = 0
+            self._burst_target_yaw = None
+            self.last_token_usage = {}
+            logger.info(
+                "LLMPlanner: %d consecutive geofence rejections — forcing 135° rotation",
+                current_geo_count,
+            )
+            return Action(
+                kind="rotate",
+                angle_deg=135.0,
+                reasoning="consecutive geofence rejections — rotating to find a clear path",
+                confidence=1.0,
+            )
+
+        # Committed advance burst: drain remaining forced advances before consulting the LLM.
+        # If the drone's heading is >45° off the target yaw, rotate toward it first
+        # (without consuming a burst step) so advances go in the right direction.
+        if self._committed_advances > 0:
+            target_yaw = self._burst_target_yaw
+            if target_yaw is not None:
+                delta = target_yaw - ctx.drone.pose.yaw_deg
+                while delta > 180.0:
+                    delta -= 360.0
+                while delta <= -180.0:
+                    delta += 360.0
+                if abs(delta) > 45.0:
+                    self.last_token_usage = {}
+                    logger.info(
+                        "LLMPlanner: burst realign — rotating %.0f° toward target yaw %.0f°",
+                        delta,
+                        target_yaw,
+                    )
+                    return Action(
+                        kind="rotate",
+                        angle_deg=delta,
+                        reasoning=f"burst realign — rotating to face target ({target_yaw:.0f}°)",
+                        confidence=1.0,
+                    )
+            self._committed_advances -= 1
+            self.last_token_usage = {}
+            logger.info(
+                "LLMPlanner: committed advance burst (%d remaining)", self._committed_advances
+            )
+            return Action(
+                kind="advance",
+                distance_m=1.0,
+                reasoning="committed advance burst — travelling to unexplored area",
+                confidence=1.0,
+            )
+
+        # No-advance guard: if the last 5 steps contain no advance the drone is
+        # spinning/scanning in place — start a 3-step committed advance burst (3 m total).
+        # Compute the target heading now (from coverage) so the burst goes toward the least
+        # explored area, not toward whatever wall the scan happened to leave the drone facing.
+        recent_kinds = [r["action_kind"] for r in ctx.recent_steps[-5:]]
+        if len(recent_kinds) >= 5 and not any(k == "advance" for k in recent_kinds):
+            target_yaw = self._least_visited_quadrant_yaw(
+                ctx.visited,
+                ctx.drone.pose,
+                ctx.geofence_x_min,
+                ctx.geofence_x_max,
+                ctx.geofence_y_min,
+                ctx.geofence_y_max,
+            )
+            self._burst_target_yaw = target_yaw
+            self._committed_advances = 3
+            self.last_token_usage = {}
+            logger.info(
+                "LLMPlanner: no advance in last 5 steps — starting burst toward %.0f°",
+                target_yaw,
+            )
+            # Rotate toward the target direction first; advances will follow via burst-drain.
+            delta = target_yaw - ctx.drone.pose.yaw_deg
+            while delta > 180.0:
+                delta -= 360.0
+            while delta <= -180.0:
+                delta += 360.0
+            return Action(
+                kind="rotate",
+                angle_deg=delta,
+                reasoning=f"no advance in last 5 steps — aligning to {target_yaw:.0f}° for burst",
                 confidence=1.0,
             )
 
@@ -225,6 +346,70 @@ class LLMPlanner:
         return _FALLBACK_ACTION
 
     @staticmethod
+    def _coverage_summary(visited: list[dict]) -> str:
+        """Summarise visited grid cells by quadrant and flag unexplored areas."""
+        unique = {(c["x_idx"], c["y_idx"]) for c in visited}
+        if not unique:
+            return "none yet"
+        # Quadrant counts (grid origin = world origin; NE = positive x AND y).
+        nw = sum(1 for x, y in unique if x < 0 and y >= 0)
+        ne = sum(1 for x, y in unique if x >= 0 and y >= 0)
+        sw = sum(1 for x, y in unique if x < 0 and y < 0)
+        se = sum(1 for x, y in unique if x >= 0 and y < 0)
+        total = len(unique)
+        quad_str = f"NW={nw} NE={ne} SW={sw} SE={se}"
+        # Flag quadrants with zero or very few visits.
+        unexplored = [q for q, n in [("NW", nw), ("NE", ne), ("SW", sw), ("SE", se)] if n == 0]
+        hint = f" — UNEXPLORED: {', '.join(unexplored)}" if unexplored else ""
+        return f"{total} cells ({quad_str}){hint}"
+
+    @staticmethod
+    def _least_visited_quadrant_yaw(
+        visited: list[dict],
+        pose: Pose,
+        x_min: float,
+        x_max: float,
+        y_min: float,
+        y_max: float,
+        advance_m: float = 1.0,
+    ) -> float:
+        """Return the yaw (degrees) toward the least-visited quadrant that is reachable.
+
+        Filters out headings where a single advance step would immediately hit the
+        geofence so the burst doesn't repeatedly slam into a corner wall.
+
+        Quadrant → world heading mapping (advance dx=cos(yaw), dy=sin(yaw)):
+          NW (x<0, y≥0) → 135°   SW (x<0, y<0) → -135°
+          NE (x≥0, y≥0) →  45°   SE (x≥0, y<0) →  -45°
+
+        Fallback: if all quadrant diagonals are blocked, aim toward room centre.
+        """
+        unique = {(c["x_idx"], c["y_idx"]) for c in visited}
+        counts = {
+            "NW": sum(1 for x, y in unique if x < 0 and y >= 0),
+            "NE": sum(1 for x, y in unique if x >= 0 and y >= 0),
+            "SW": sum(1 for x, y in unique if x < 0 and y < 0),
+            "SE": sum(1 for x, y in unique if x >= 0 and y < 0),
+        }
+        _yaw = {"NW": 135.0, "NE": 45.0, "SW": -135.0, "SE": -45.0}
+
+        margin = 0.4  # keep a little extra clear of the exact geofence edge
+        safe_x_min = x_min + margin
+        safe_x_max = x_max - margin
+        safe_y_min = y_min + margin
+        safe_y_max = y_max - margin
+
+        for quad in sorted(counts, key=lambda q: counts[q]):
+            yaw_rad = math.radians(_yaw[quad])
+            nx = pose.x + math.cos(yaw_rad) * advance_m
+            ny = pose.y + math.sin(yaw_rad) * advance_m
+            if safe_x_min <= nx <= safe_x_max and safe_y_min <= ny <= safe_y_max:
+                return _yaw[quad]
+
+        # All quadrant diagonals blocked — head toward room centre.
+        return math.degrees(math.atan2(-pose.y, -pose.x))
+
+    @staticmethod
     def _build_user_message(ctx: PlanContext) -> str:
         dets = ctx.detections
         det_str = (
@@ -241,6 +426,15 @@ class LLMPlanner:
             )
             or "none"
         )
+        # Show only the most recent safety event with total count.
+        # Showing 3 accumulated events confused the LLM into over-rotating on stale alerts.
+        if ctx.safety_events:
+            last = ctx.safety_events[-1]
+            n = len(ctx.safety_events)
+            safety_str = f"[{last.kind}] {last.reason} ({n} total this mission)"
+        else:
+            safety_str = "none"
+        coverage = LLMPlanner._coverage_summary(ctx.visited)
         return (
             f"Target: {ctx.target.label}\n"
             f"Step: {ctx.step}/{ctx.max_steps}\n"
@@ -248,5 +442,7 @@ class LLMPlanner:
             f"Perception: {det_str}\n"
             f"Observation: {ctx.observation}\n"
             f"Recent history: {recent}\n"
+            f"Safety alerts (recent): {safety_str}\n"
+            f"Coverage: {coverage}\n"
             f"Summary: {ctx.history_summary or 'none'}\n"
         )

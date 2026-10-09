@@ -87,6 +87,7 @@ class SimDrone:
         self._connect_time: float = 0.0
         self._target_ids: dict[str, int] = {}  # populated by connect() via SceneBuilder
         self._marker_id: int | None = None  # GUI-only visual marker to make the drone visible
+        self._gui_step_dt: float = 0.0  # sleep per step in GUI mode to avoid M1 GPU crash
 
     # ------------------------------------------------------------------
     # DroneInterface
@@ -145,6 +146,12 @@ class SimDrone:
                 basePosition=[sp[0], sp[1], 0.35],
                 physicsClientId=self._env.CLIENT,  # type: ignore[union-attr]
             )
+
+        # In GUI mode, pace the inner PID loop to real-time to prevent M1 GPU segfault.
+        # The tight _step() loop would otherwise fire hundreds of PyBullet + Metal calls
+        # per second from the agent thread, overwhelming the renderer.
+        if self._gui:
+            self._gui_step_dt = 1.0 / self._env.CTRL_FREQ  # type: ignore[union-attr]
 
         self._connect_time = time.monotonic()
         logger.info("SimDrone connected (gui=%s, scene=%s)", self._gui, self._scenario.scene_id)
@@ -215,9 +222,7 @@ class SimDrone:
 
     def get_frame(self) -> Frame:
         self._require_connected()
-        env = self._env
-        rgba_raw, _, _ = env._getDroneImages(0, segmentation=False)  # type: ignore[union-attr]
-        # RGBA int64 → RGB uint8
+        rgba_raw, _, _ = self._capture_camera(segmentation=False)
         rgba: NDArray[np.uint8] = np.array(rgba_raw, dtype=np.uint8)
         rgb: NDArray[np.uint8] = rgba[:, :, :3]
         elapsed = time.monotonic() - self._connect_time
@@ -233,8 +238,7 @@ class SimDrone:
         *label_to_body_id* maps each target label to its PyBullet body unique ID.
         """
         self._require_connected()
-        env = self._env
-        rgba_raw, _, seg_raw = env._getDroneImages(0, segmentation=True)  # type: ignore[union-attr]
+        rgba_raw, _, seg_raw = self._capture_camera(segmentation=True)
         rgba: NDArray[np.uint8] = np.array(rgba_raw, dtype=np.uint8)
         rgb: NDArray[np.uint8] = rgba[:, :, :3]
         seg: NDArray[np.int32] = np.array(seg_raw, dtype=np.int32)
@@ -265,6 +269,10 @@ class SimDrone:
         )
         self._env.step(np.array([rpm]))  # type: ignore[union-attr]
 
+        # Pace to real-time in GUI mode so the Metal renderer can keep up (M1 fix)
+        if self._gui_step_dt > 0.0:
+            time.sleep(self._gui_step_dt)
+
         if self._marker_id is not None:
             import pybullet as p
 
@@ -275,6 +283,57 @@ class SimDrone:
                 [0.0, 0.0, 0.0, 1.0],
                 physicsClientId=self._env.CLIENT,  # type: ignore[union-attr]
             )
+
+    def _capture_camera(self, segmentation: bool = False) -> tuple[object, object, object]:
+        """Replicate _getDroneImages but force ER_TINY_RENDERER.
+
+        In GUI mode PyBullet's getCameraImage defaults to the hardware OpenGL
+        renderer, which races with the GUI's own Metal context on macOS M1 and
+        causes a segfault.  The tiny (software) renderer is independent of the
+        GUI and is safe to call from any thread/mode.
+        """
+        import pybullet as p
+
+        env = self._env
+        quat = env.quat[0, :]  # type: ignore[union-attr]
+        pos = env.pos[0, :]  # type: ignore[union-attr]
+        arm_l = env.L  # type: ignore[union-attr]
+        img_res = env.IMG_RES  # type: ignore[union-attr]
+        client = env.CLIENT  # type: ignore[union-attr]
+
+        rot_mat = np.array(p.getMatrixFromQuaternion(quat)).reshape(3, 3)
+        target = np.dot(rot_mat, np.array([1000.0, 0.0, 0.0])) + pos
+        view = p.computeViewMatrix(
+            cameraEyePosition=pos + np.array([0.0, 0.0, arm_l]),
+            cameraTargetPosition=target,
+            cameraUpVector=[0, 0, 1],
+            physicsClientId=client,
+        )
+        proj = p.computeProjectionMatrixFOV(
+            fov=_IMG_FOV_DEG,
+            aspect=1.0,
+            nearVal=arm_l,
+            farVal=1000.0,
+        )
+        seg_flag = (
+            p.ER_SEGMENTATION_MASK_OBJECT_AND_LINKINDEX
+            if segmentation
+            else p.ER_NO_SEGMENTATION_MASK
+        )
+        w, h, rgb, dep, seg = p.getCameraImage(
+            width=int(img_res[0]),
+            height=int(img_res[1]),
+            shadow=1,
+            viewMatrix=view,
+            projectionMatrix=proj,
+            flags=seg_flag,
+            renderer=p.ER_TINY_RENDERER,
+            physicsClientId=client,
+        )
+        rgb = np.reshape(rgb, (h, w, 4))
+        dep = np.reshape(dep, (h, w))
+        seg = np.reshape(seg, (h, w))
+        return rgb, dep, seg
 
     def _fly_to(
         self,

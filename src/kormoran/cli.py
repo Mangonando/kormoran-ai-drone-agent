@@ -213,7 +213,7 @@ def run_mission(
     from kormoran.config import ScenarioConfig, get_settings
     from kormoran.drones.sim import SimDrone
     from kormoran.perception.color_detector import ColorDetector
-    from kormoran.recording import MissionLogger
+    from kormoran.recording import MissionLogger, save_gif
     from kormoran.types import TargetSpec
 
     settings = get_settings()
@@ -307,6 +307,10 @@ def run_mission(
 
         if mission_logger is not None:
             typer.echo(f"  Log      : {log_path}")
+            if mission_logger.frames:
+                gif_path = Path(settings.data_dir) / "missions" / f"{mission_id}.gif"
+                save_gif(mission_logger.frames, gif_path, fps=2, scale=4, loop=1)
+                typer.echo(f"  GIF      : {gif_path}")
 
         if status not in ("found",):
             raise typer.Exit(code=1)

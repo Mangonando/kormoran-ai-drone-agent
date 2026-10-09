@@ -76,8 +76,8 @@ def build_mission_graph(
     builder: StateGraph = StateGraph(MissionState)
 
     builder.add_node("recall_memory", make_recall_memory_node())
-    builder.add_node("perceive", make_perceive_node(drone, perceiver))
-    builder.add_node("plan", make_plan_node(planner))
+    builder.add_node("perceive", make_perceive_node(drone, perceiver, mission_logger))
+    builder.add_node("plan", make_plan_node(planner, config))
     builder.add_node("validate", make_validate_node(config))
     builder.add_node("act", make_act_node(executor, perceiver, mission_logger))
     builder.add_node("check", make_check_node())

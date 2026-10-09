@@ -189,6 +189,77 @@ to avoid spurious detections.
 
 ---
 
+## 2026-10-08 — M4: executor drift recovery after scan/rotate
+
+**Context:** After fixing the supervisor's "already outside" path, advances from y=-2.99 were
+allowed but still timed out (`status="clamped"`).  Root cause: the room has physical PyBullet
+walls at y=±3.0 (built by `SceneBuilder._build_walls`).  The geofence margin is 0.3 m
+(geofence at y=±2.7), but scan operations cause up to 0.3 m of PID drift, pushing the drone
+against the physical wall at y=-2.99.  Once physically touching the wall, the PID controller
+cannot stabilise the drone enough to complete any move → all moves time out.
+
+**Decision:** Add `SkillExecutor._recover_from_drift(pose)` and call it at the end of every
+`execute()` call, after the skill returns.  If the post-action pose is outside the geofence,
+the method computes the nearest in-bounds target (geofence edge + 0.2 m buffer), converts the
+world-frame delta to body-frame, and calls `drone.move_relative()` directly.  The recovery is
+silent (no safety event added) and transparent to the agent — the next `perceive_node` call
+sees the recovered position.
+
+**Consequences:** Scan/rotate drift no longer traps the drone against the physical wall.
+The 0.2 m inward buffer gives clearance from the geofence boundary after recovery.
+
+---
+
+## 2026-10-08 — M4: supervisor geofence drift recovery
+
+**Context:** The supervisor only intercepts `advance`/`strafe`/`climb`/`descend` actions; it does
+NOT check `rotate` or `scan`.  Both skills cause small physical displacements (PID overshoot,
+8-frame sweep), which can push the drone slightly outside the geofence.  Once outside
+(e.g. y=-2.99 when y_min=-2.7), `_max_scale_2d` misbehaves: if the heading has any tiny
+southward component (floating-point sin(≈0°) < 0), the formula gives
+`scale = (y_min - y) / tiny_negative = large_negative → max(0, negative) = 0`, so
+`clamped_dist = 0 < _MIN_CLAMPED_M` → REJECT.  The drone is then trapped: every advance is
+rejected and the planner guards loop endlessly.
+
+**Decision:** Add a "drone already outside" early-exit in `_check_geofence_horizontal`:
+- Detect if `pose.x` or `pose.y` is already outside the bounds.
+- If the proposed move does **not** worsen the violation (neutral or inward), allow it outright.
+- If the move pushes further outside, reject and rotate as before.
+
+This recovers from physical drift without changing the normal (inside → attempted-outside)
+clamping behaviour.
+
+**Consequences:** Drones that drift outside the geofence during scan/rotate can now self-rescue
+by advancing parallel to or away from the violated boundary.  The normal scale-clamping path is
+unchanged for moves that start inside the geofence.
+
+---
+
+## 2026-10-08 — M4: LLM rejection loop fix (prompt v3 + consecutive-rejection guard)
+
+**Context:** LLM run on `living_room_v1` (seed 2, 50 steps, 38 LLM calls, $0.006) showed the
+drone stuck near the south wall for ~900 s.  The supervisor rejected the same advance direction
+~30 times; the LLM never changed strategy because:
+1. `_build_user_message` did not include safety events, so the LLM was unaware its advance was
+   being rejected and replaced with a supervisor-forced rotate.
+2. No programmatic guard existed to break the loop when the same direction was repeatedly blocked.
+
+**Decisions:**
+- `LLMPlanner._build_user_message`: append `"Safety alerts (recent): <last 3 safety events>"`
+  so the LLM always sees rejection reason + kind in its context.
+- `LLMPlanner.plan()`: consecutive-rejection guard — if `ctx.safety_events[-3:]` contains ≥ 2
+  geofence events, skip the LLM call and return `rotate(135°)` directly.  This is a hard
+  deterministic escape hatch; the drone will face a new direction before the LLM is consulted.
+- `SYSTEM_PROMPT` bumped to v3: safety constraints section updated to explain that rejections
+  appear in "Safety alerts", and a bold rule added: never repeat the same advance after a
+  geofence rejection — rotate ≥ 90° first.
+
+**Consequences:** The loop is broken at most 2 rejections deep (deterministic guard) and the LLM
+has enough context to avoid the same direction next time.  The 135° rotation ensures the drone
+faces well away from the blocking wall, not just 90° (which could still be into a corner).
+
+---
+
 ## 2026-10-06 — M4: supervisor geofence rejection changed from land to rotate
 
 **Context:** After fixing the false-found bug (see entry below), all seeds returned `aborted`
@@ -228,3 +299,114 @@ false positives, not genuine visual finds.
 still works via both the consecutive-detection criterion and voluntary LLM `land` calls.
 The `absent_target` false-found rate drops to near 0.  The `living_room_v1` success rate will
 reflect real visual detection rather than geofence collisions.
+
+---
+
+## 2026-10-09 — M4: fix grid cell jitter (floor → round in _cell_from_pose)
+
+**Context:** With the direction-aware burst, seed 3 still returned `not_found`.  The burst fired
+toward SW (-135°) instead of NW (135°, where the cube at x=-1.31, y=0.22 is).  Log analysis
+showed that after the step-4 scan, the drone's pose was (-0.0000, 0.0000) — a tiny negative
+float from PID drift.  `math.floor(-ε / 0.5)` = -1, recording cell (-1, 0) as NW visited.
+At burst time: NW=1, NE=1, SW=0, SE=0 → `min()` picked SW (first zero-count key) → burst
+headed -135° (opposite direction from the cube).
+
+**Root cause:** `_cell_from_pose` used `math.floor`, so any sub-millimetre drift past the x=0
+or y=0 cell boundary falsely registers the neighbouring cell as visited, corrupting the
+coverage quadrant counts used by `_least_visited_quadrant_yaw`.
+
+**Decision:** Change `_cell_from_pose` to use `round()`.  A drone at x=-0.0001 (1/10mm west)
+rounds to cell 0 (NE) rather than cell -1 (NW).  Real exploration (moving ≥ 0.25 m into a
+half-space) correctly maps to the expected cell index.  The ±0.25 m snap zone is well below
+any deliberate move (minimum 0.2 m) and well above typical PID drift (< 5 mm).
+
+**Consequences:** Sub-millimetre origin drift no longer contaminates the coverage signal.
+`_least_visited_quadrant_yaw` will correctly identify NW as unexplored when the drone has
+only scanned and rotated at the origin, directing the burst toward the right half of the room.
+
+---
+
+## 2026-10-09 — M4: direction-aware burst
+
+**Context:** Seed 3 run with v5 prompt + 3-step burst returned `not_found` in 33.8 s / 50 steps.
+After the initial scan+rotate sequence, the drone's yaw was 53° (pointing NE).  The no-advance
+guard fired and sent 3×1.0m advances at 53° → drone reached (2.07, 2.86), deep in the NE corner.
+The cube was at x=-1.31, y=0.22 (NW).  The burst drove the drone the opposite direction.  Once
+in the NE corner, every advance hit the geofence; the geo-rejection loop consumed the rest of
+the budget.  The drone never visited x<0.
+
+**Root cause:** The burst fired in the drone's current heading, which was set by the most recent
+scan (360° sweep → final yaw unpredictable).  3m in an arbitrary direction can push the drone
+into a corner on the wrong side of the room.
+
+**Decision:** Make the burst direction-aware:
+- `LLMPlanner.__init__`: add `_burst_target_yaw: float | None = None`.
+- New static method `_least_visited_quadrant_yaw(visited)`: inspects `visited` grid cells,
+  counts per quadrant (NW/NE/SW/SE), picks the least-visited, and returns the corresponding
+  world yaw (NW→135°, NE→45°, SW→-135°, SE→-45°, using dx=cos(yaw), dy=sin(yaw) convention).
+- No-advance guard: compute `_burst_target_yaw` from coverage, set `_committed_advances = 3`,
+  then return a **rotate** toward the target yaw rather than the first advance.  The burst-drain
+  fires the 3 advances on subsequent steps.
+- Burst-drain: before each advance, check if current yaw is >45° off `_burst_target_yaw`.
+  If so, return a rotate (no burst step consumed) until aligned; then advance.
+- Consecutive-geo guard: resets `_committed_advances = 0` and `_burst_target_yaw = None` to
+  abort a burst that keeps hitting walls.
+
+**Consequences:** Bursts now travel toward the least-explored quadrant regardless of what yaw
+the previous scan left the drone at.  Alignment rotates are free (don't consume burst steps).
+A burst that hits the geofence is aborted by the geo guard after 2 rejections.
+
+---
+
+## 2026-10-08 — M4: committed advance burst + prompt v5
+
+**Context:** Seed 3 run (`living_room_v1`, red cube at x=-1.31, y=0.22 — NW quadrant) returned
+`not_found` in 57.3 s / 50 steps / 31 LLM calls.  Two failure modes observed:
+
+1. Step 1: LLM wrote "advance to NW" but the drone's heading after the scan pointed SE.
+   `advance` always moves in the current yaw — the LLM didn't rotate first.
+2. Steps 5–50: LLM saw "UNEXPLORED: NW" each step and chose `rotate` repeatedly.  The
+   no-advance guard fired every ~6 steps and forced a single 0.5 m advance.  From x=2.5,
+   one 0.5 m advance only reaches x=2.0 — still SE.  The drone needed ~8 advances to cross
+   to negative-x territory; it never got more than one in a row.
+
+**Decisions:**
+- `LLMPlanner.__init__`: add `_committed_advances: int = 0`.
+- `LLMPlanner.plan()`: before consulting the LLM, drain `_committed_advances` by returning
+  `advance(1.0 m)` and decrementing the counter.  When the no-advance guard fires, set
+  `_committed_advances = 2` (this step + 2 more = **3 × 1.0 m = 3 m** total burst).
+  3 m is enough to cross from any SE corner to the NW half of a 6 m room.
+- `SYSTEM_PROMPT` bumped to v5: new "Heading and movement rules" section explaining that
+  `advance` follows current yaw (rotate first if needed) and that reaching a new quadrant
+  requires **at least 3 consecutive 1.0 m advances** without interruption.  Coverage rule 4
+  updated with the same 3-advance commitment requirement.
+
+**Consequences:** The drone now travels in committed bursts rather than one-advance-then-rotate
+cycles.  The deterministic burst guard is the hard backstop; the prompt change reduces how often
+the guard is needed by teaching the LLM the correct multi-advance pattern.
+
+---
+
+## 2026-10-08 — M4: prompt v4 — coverage-guided exploration
+
+**Context:** After fixing the geofence loop and drift recovery, a 61.7 s run showed the drone
+moving freely but still returning `not_found` for `living_room_v1` seed 2 (target at
+(-1.19, -1.01)).  Log analysis showed the drone stayed in the SW quadrant for the majority of
+steps, never venturing into NE or SE.  The `visited` grid data was already being computed
+(M4 state, GRID_CELL_SIZE_M=0.5) and exposed in `MissionState["visited"]`, but neither the
+user message nor the prompt told the LLM to use it.
+
+**Decisions:**
+- `PlanContext`: add `visited: list[dict]` field (list of `{x_idx, y_idx}` grid cell dicts).
+- `make_plan_node` in `nodes.py`: pass `visited=list(state["visited"])` when constructing
+  `PlanContext`.
+- `LLMPlanner._coverage_summary(visited)`: new static method that computes unique cell count
+  and per-quadrant breakdown (NW/NE/SW/SE relative to origin), flagging any quadrant with
+  zero visits as "UNEXPLORED".  Example: `18 cells (NW=3 NE=2 SW=12 SE=1) — UNEXPLORED: NE`.
+- `LLMPlanner._build_user_message`: append `Coverage: {coverage}` line from the summary.
+- `SYSTEM_PROMPT` bumped to v4: new rule in "Search strategy" — if any quadrant is UNEXPLORED,
+  rotate to face it and advance there before re-scanning already-visited areas.
+
+**Consequences:** The LLM now has explicit spatial feedback on where it has and hasn't been.
+UNEXPLORED flags create a strong directional signal to break the tendency to scan in circles.
+The coverage summary is O(n) over visited cells and adds negligible overhead.
