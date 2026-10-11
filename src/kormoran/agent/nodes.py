@@ -177,10 +177,14 @@ def make_plan_node(planner: object, config: Settings) -> Callable[[MissionState]
         reflex_action: Action | None = None
         if detections and detections[0].area_frac >= REFLEX_AREA_FRAC and not approach_blocked:
             area = detections[0].area_frac
+            cx = detections[0].center_norm[0] if detections[0].center_norm else 0.0
             descent_needed = drone_state.pose.z - REFLEX_ALTITUDE_M
-            if area >= REFLEX_LAND_FRAC and state.get("consecutive_found", 0) >= 1:
-                # Drone is right on top of the target and has already confirmed
-                # at least one qualifying frame — land to finalise the find.
+            if area >= REFLEX_LAND_FRAC and (
+                state.get("consecutive_found", 0) >= 1 or abs(cx) <= FOUND_CENTER_TOL
+            ):
+                # Drone is right on top of the target — land immediately if
+                # either we already confirmed a qualifying frame OR the target
+                # is large and centred right now (no point risking another step).
                 reflex_action = Action(
                     kind="land",
                     reasoning="reflex: target fills frame — landing to confirm",
@@ -211,7 +215,12 @@ def make_plan_node(planner: object, config: Settings) -> Callable[[MissionState]
             )
 
         if reflex_action is not None:
-            return {"last_action": reflex_action.model_dump()}
+            update = {"last_action": reflex_action.model_dump()}
+            # If landing immediately on a centred target, ensure
+            # consecutive_found is set so check_node recognises the find.
+            if reflex_action.kind == "land":
+                update["consecutive_found"] = max(state.get("consecutive_found", 0), 1)
+            return update
 
         try:
             action: Action = planner.plan(ctx)  # type: ignore[union-attr]
@@ -221,6 +230,36 @@ def make_plan_node(planner: object, config: Settings) -> Callable[[MissionState]
                 reasoning="planner exhausted its action list",
                 confidence=1.0,
             )
+
+        # Guardrail: if the LLM returns rotate but the last action was also
+        # rotate, force movement instead.  LLMs tend to spin in place
+        # indefinitely — this ensures the drone moves after every rotation.
+        # If the last advance was clamped (wall), force a scan instead so
+        # the LLM gets fresh context and can pick a new direction.
+        if action.kind == "rotate":
+            recent = list(state.get("recent_steps", []))
+            last_kind = recent[-1]["action_kind"] if recent else ""
+            if last_kind == "rotate":
+                # Check if recent advances were clamped (stuck at wall).
+                last_advance_clamped = any(
+                    r["action_kind"] == "advance" and r["result_status"] == "clamped"
+                    for r in recent[-5:]
+                )
+                if last_advance_clamped:
+                    logger.info("plan_node guardrail: consecutive rotate near wall → forcing scan")
+                    action = Action(
+                        kind="scan",
+                        reasoning="guardrail: scan to find new direction after wall block",
+                        confidence=1.0,
+                    )
+                else:
+                    logger.info("plan_node guardrail: consecutive rotate → forcing advance 0.5m")
+                    action = Action(
+                        kind="advance",
+                        distance_m=0.5,
+                        reasoning="guardrail: forced advance after consecutive rotate",
+                        confidence=1.0,
+                    )
 
         update: dict = {"last_action": action.model_dump()}
 
@@ -444,9 +483,78 @@ def make_check_node() -> Callable[[MissionState], dict]:
         else:
             consecutive = 0
 
-        return {"status": "flying", "consecutive_found": consecutive}
+        # Build a deterministic history summary from ALL steps so far.
+        # This gives the LLM a "map" of the mission even after old steps
+        # scroll out of the recent_steps window.
+        summary = _build_history_summary(list(state["recent_steps"]))
+
+        return {
+            "status": "flying",
+            "consecutive_found": consecutive,
+            "history_summary": summary,
+        }
 
     return check_node
+
+
+def _build_history_summary(steps: list[StepRecord]) -> str:
+    """Build a deterministic text summary of the full mission history."""
+    if not steps:
+        return ""
+
+    # Collect all positions visited.
+    xs = [r["pose_x"] for r in steps]
+    ys = [r["pose_y"] for r in steps]
+
+    # Identify wall positions from clamped advances.
+    clamped = [
+        r
+        for r in steps
+        if r["result_status"] == "clamped" and r["action_kind"] in ("advance", "approach")
+    ]
+    crashes = sum(
+        1 for r in steps if r["action_kind"] == "takeoff" and "reflex" in r.get("reasoning", "")
+    )
+
+    # Cluster clamped positions to identify walls.
+    wall_hints: list[str] = []
+    if clamped:
+        cx = [r["pose_x"] for r in clamped]
+        cy = [r["pose_y"] for r in clamped]
+        # Check for horizontal walls (constant y).
+        for threshold_y in sorted(set(round(y, 0) for y in cy)):
+            hits = sum(1 for y in cy if abs(y - threshold_y) < 0.3)
+            if hits >= 2:
+                wall_hints.append(f"wall at y≈{threshold_y:.0f} ({hits} hits)")
+        # Check for vertical walls (constant x).
+        for threshold_x in sorted(set(round(x, 0) for x in cx)):
+            hits = sum(1 for x in cx if abs(x - threshold_x) < 0.3)
+            if hits >= 2:
+                wall_hints.append(f"wall at x≈{threshold_x:.0f} ({hits} hits)")
+
+    parts: list[str] = []
+    parts.append(
+        f"Steps so far: {len(steps)}. "
+        f"Area covered: x=[{min(xs):.1f},{max(xs):.1f}] y=[{min(ys):.1f},{max(ys):.1f}]."
+    )
+    if wall_hints:
+        parts.append(f"Walls detected: {'; '.join(wall_hints)}.")
+    if crashes:
+        parts.append(f"Crashes: {crashes}.")
+
+    # Flag areas NOT yet visited.
+    positions = list(zip(xs, ys, strict=True))
+    visited_ne = any(x >= 0 and y >= 0 for x, y in positions)
+    visited_se = any(x >= 0 and y < 0 for x, y in positions)
+    not_visited = []
+    if not visited_ne:
+        not_visited.append("NE (x>0, y>0)")
+    if not visited_se:
+        not_visited.append("SE (x>0, y<0)")
+    if not_visited:
+        parts.append(f"NOT YET VISITED: {', '.join(not_visited)}.")
+
+    return " ".join(parts)
 
 
 # ---------------------------------------------------------------------------

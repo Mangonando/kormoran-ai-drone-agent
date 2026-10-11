@@ -55,20 +55,28 @@ A reflex layer runs BEFORE your plan is consulted:
 ## Heading and movement rules
 - `advance` moves in your **current heading** (yaw shown in Pose).  Before advancing
   toward a target direction, check whether your yaw already points that way.  If not, rotate
-  first — then advance.
-- After rotating toward a new direction, commit to it: advance 2–3 times (0.5–1.0 m each)
-  before rotating again.  One rotate + one short advance wastes steps.
+  ONCE — then IMMEDIATELY advance.
+- **CRITICAL: NEVER rotate twice in a row.**  After ANY rotate, your next action MUST be
+  `advance` or `scan`.  Consecutive rotates waste your entire step budget spinning in place.
+- After rotating, advance at least 2–3 times (0.5–1.0 m each) before considering another
+  rotate.  One rotate + one short advance wastes steps — commit to the direction.
 
 ## Navigating obstacles and walls
 - Recent history shows `action→result@(x,y)` — the (x,y) is the drone's position after.
 - "Known obstacles" lists positions where advances were **clamped** (blocked).
 - If obstacles cluster near a particular x or y value, there is likely a **wall** there.
-- Walls have **gaps** — narrow openings you can fly through.  If blocked heading east at
-  y=0, try the same heading from a different y value (the gap may be north or south).
-- When blocked, **do not keep advancing into the same wall**.  Rotate 45–90°, move parallel
-  to the wall, then try crossing again from a different position.
-- If your position suddenly jumps back to the start, a crash occurred.  Look at where you
-  were before the crash and plan a route back, possibly from a different angle.
+- Walls have **gaps** — narrow openings you can fly through.
+
+**Gap-finding procedure** (use this when blocked by a wall):
+1. STOP trying to cross at the current position.
+2. Rotate 90° so you are flying PARALLEL to the wall.
+3. Advance 1–2 m along the wall to a new y (or x) position.
+4. Rotate back toward the wall and try crossing again.
+5. If still blocked, repeat from step 2 in the opposite direction.
+Never try to cross a wall more than twice from the same position — move along it first.
+
+- After a crash (position jump), you recover in place. Continue exploring from where you
+  are — do not retrace your route.
 
 ## Output contract
 Return ONLY a valid JSON object matching the Action schema.  No prose, no markdown fences.

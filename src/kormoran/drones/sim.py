@@ -186,47 +186,39 @@ class SimDrone:
             import pybullet as p
 
             drone_id = self._env.DRONE_IDS[0]  # type: ignore[union-attr]
-            # Teleport to the scenario start position — always guaranteed to be
-            # obstacle-free.  The crash orientation is unreliable (the drone may
-            # have tumbled), so nudging along it often lands the drone back on
-            # the same wall.  Starting from a known-safe XY avoids that entirely.
-            safe_x = self._recovery_x
-            safe_y = self._recovery_y
-            # Use identity orientation (flat, upright) rather than the
-            # crashed drone's quaternion, which may be inverted — an inverted
-            # drone applies thrust downward and can never recover altitude.
-            p.resetBasePositionAndOrientation(
-                drone_id,
-                [safe_x, safe_y, altitude_m * 0.5],
-                [0.0, 0.0, 0.0, 1.0],
+            # Crash recovery: reset orientation and velocity at the CURRENT XY
+            # position, then climb back up.  This preserves navigation progress
+            # instead of teleporting the drone back to start.
+            # Preserve the pre-crash yaw so the drone doesn't reset to 0°.
+            recover_x = float(state[0])
+            recover_y = float(state[1])
+            recover_yaw = float(state[9])  # rpy_rad[2] = yaw in radians
+            quat = p.getQuaternionFromEuler(
+                [0.0, 0.0, recover_yaw],
                 physicsClientId=self._env.CLIENT,  # type: ignore[union-attr]
             )
-            # Zero out residual crash velocity.
+            p.resetBasePositionAndOrientation(
+                drone_id,
+                [recover_x, recover_y, altitude_m * 0.5],
+                quat,
+                physicsClientId=self._env.CLIENT,  # type: ignore[union-attr]
+            )
             p.resetBaseVelocity(
                 drone_id,
                 linearVelocity=[0.0, 0.0, 0.0],
                 angularVelocity=[0.0, 0.0, 0.0],
                 physicsClientId=self._env.CLIENT,  # type: ignore[union-attr]
             )
-            # Reinitialise the PID controller to clear integral wind-up
-            # accumulated while fighting the crash.
             from gym_pybullet_drones.control.DSLPIDControl import DSLPIDControl
             from gym_pybullet_drones.utils.enums import DroneModel
 
             self._ctrl = DSLPIDControl(drone_model=DroneModel.CF2X)
-            # Force-update CtrlAviary's internal kinematic cache to match the
-            # physics reset.  _getDroneStateVector() reads from cached arrays
-            # (env.pos, env.quat, …) that are only refreshed by env.step().
-            # Without this, the first _fly_to() call computes the target from
-            # the stale crash position and flies toward it, causing another crash.
             self._env._updateAndStoreKinematicInformation()  # type: ignore[union-attr]
             logger.info(
-                "SimDrone: physics-reset from (%.2f, %.2f, %.3f) → (%.2f, %.2f, %.2f)",
+                "SimDrone: crash recovery in-place at (%.2f, %.2f, %.3f) → z=%.2f",
                 state[0],
                 state[1],
                 state[2],
-                safe_x,
-                safe_y,
                 altitude_m * 0.5,
             )
             state = self._get_state_vec()

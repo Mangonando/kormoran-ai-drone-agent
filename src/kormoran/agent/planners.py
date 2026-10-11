@@ -311,7 +311,7 @@ class LLMPlanner:
             "; ".join(
                 f"step{r['step']}:{r['action_kind']}→{r['result_status']}"
                 f"@({r['pose_x']:.1f},{r['pose_y']:.1f})"
-                for r in ctx.recent_steps[-5:]
+                for r in ctx.recent_steps[-10:]
             )
             or "none"
         )
@@ -327,7 +327,7 @@ class LLMPlanner:
             for r in ctx.recent_steps
             if r["result_status"] == "clamped" and r["action_kind"] in ("advance", "approach")
         ]
-        wall_hints = "near " + "; ".join(clamped[-5:]) if clamped else "none yet"
+        wall_hints = "near " + "; ".join(clamped[-10:]) if clamped else "none yet"
 
         return (
             f"Target: {ctx.target.label}\n"

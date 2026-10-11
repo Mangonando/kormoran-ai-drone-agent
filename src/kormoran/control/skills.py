@@ -104,6 +104,22 @@ def advance(
             forward_progress,
             distance_m,
         )
+        # Stabilize: if the drone dropped, hover back up to pre-advance
+        # altitude to prevent a ground crash on the next step.
+        if dz < -0.2:
+            recover_alt = before.z - result.pose.z + 0.1
+            logger.info(
+                "skill advance: stabilizing +%.1fm after wall hit (z=%.2f)",
+                recover_alt,
+                result.pose.z,
+            )
+            recover_result = drone.move_relative(0.0, 0.0, recover_alt, 5.0)
+            return MoveResult(
+                status="clamped",
+                pose=recover_result.pose,
+                elapsed_s=result.elapsed_s + recover_result.elapsed_s,
+                reason="path blocked",
+            )
         return MoveResult(
             status="clamped",
             pose=result.pose,
@@ -184,7 +200,18 @@ def approach(
     """
     step_m = max(0.1, min(step_m, 0.5))
     cx = detection.center_norm[0]  # horizontal offset: positive = right
-    dy = -cx * step_m * 0.5
+
+    # If the target is far off-centre, rotate to face it before advancing.
+    # The camera FOV is ~60°, so cx=1.0 corresponds to ~30° off-axis.
+    # Rotating first is far more effective than tiny lateral nudges.
+    if abs(cx) > 0.3:
+        yaw_correction = -cx * 30.0  # degrees; positive cx → rotate clockwise (negative)
+        logger.debug("skill approach: rotating %.1f° to centre (cx=%.2f)", yaw_correction, cx)
+        drone.rotate(yaw_correction, timeout_s=3.0)
+
+    # After rotation, use a moderate lateral correction for fine-tuning.
+    # Re-read cx would require a new frame; instead use a smaller residual correction.
+    dy = -cx * step_m * 0.3
     logger.debug("skill approach step_m=%.2f cx=%.2f dy=%.2f", step_m, cx, dy)
 
     before = drone.get_state().pose
@@ -207,6 +234,20 @@ def approach(
             forward_progress,
             step_m,
         )
+        if dz < -0.2:
+            recover_alt = before.z - result.pose.z + 0.1
+            logger.info(
+                "skill approach: stabilizing +%.1fm after wall hit (z=%.2f)",
+                recover_alt,
+                result.pose.z,
+            )
+            recover_result = drone.move_relative(0.0, 0.0, recover_alt, 5.0)
+            return MoveResult(
+                status="clamped",
+                pose=recover_result.pose,
+                elapsed_s=result.elapsed_s + recover_result.elapsed_s,
+                reason="path blocked",
+            )
         return MoveResult(
             status="clamped",
             pose=result.pose,

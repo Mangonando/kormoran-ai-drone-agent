@@ -28,5 +28,5 @@ def make_llm(settings: Settings) -> ChatOpenAI:
         api_key=settings.openrouter_api_key.get_secret_value(),
         timeout=settings.llm_timeout_s,
         temperature=0,
-        max_tokens=500,
+        max_tokens=2000,
     )
