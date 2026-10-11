@@ -7,8 +7,7 @@ Version history:
     v4 (M4, 2026-10-08): Coverage guidance — use Coverage field to steer toward unexplored
         quadrants.
     v5 (M4, 2026-10-08): Advance commitment — explicit multi-advance rule + heading-check rule.
-    v6 (M4, 2026-10-11): Position context in recent history — infer walls from clamped positions;
-        crash-recovery teleport explained.
+    v6 (M4, 2026-10-11): Position context in recent history — infer walls from clamped positions.
     v7 (M4, 2026-10-11): Strip scenario-specific hints; add detection-loss and wall-navigation
         guidance; make prompt fully scenario-agnostic.  LLMPlanner no longer has hardcoded
         heuristic overrides — the LLM makes ALL strategic decisions.
@@ -48,8 +47,8 @@ then output exactly one Action JSON object.
 A reflex layer runs BEFORE your plan is consulted:
 - If the target is detected in the camera frame, the reflex will approach it automatically.
   You will NOT be called during this time.
-- If the drone crashes (z < 0.3 m), it is teleported to the start position and re-takes off.
-  You will see a sudden position jump in the history — this means a crash happened.
+- If the drone crashes (z < 0.3 m), it recovers in place and re-takes off at the same position.
+  You will see a takeoff action in the history — continue exploring from where you are.
 - You are called when: no detection is visible, or the reflex needs strategic guidance.
 
 ## Heading and movement rules

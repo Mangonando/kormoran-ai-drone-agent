@@ -129,10 +129,6 @@ def make_plan_node(planner: object, config: Settings) -> Callable[[MissionState]
             recalled=list(state["recalled"]),
             safety_events=safety_events,
             visited=list(state["visited"]),
-            geofence_x_min=config.geofence_x_min,
-            geofence_x_max=config.geofence_x_max,
-            geofence_y_min=config.geofence_y_min,
-            geofence_y_max=config.geofence_y_max,
         )
 
         # ------------------------------------------------------------------

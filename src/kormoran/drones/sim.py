@@ -89,10 +89,6 @@ class SimDrone:
         self._env: object | None = None  # CtrlAviary, typed as object to avoid top-level import
         self._ctrl: object | None = None  # DSLPIDControl
         self._is_flying: bool = False
-        # Safe recovery position — set from scenario start pose at connect() time.
-        _sp = self._scenario.start_pose
-        self._recovery_x: float = float(_sp[0])
-        self._recovery_y: float = float(_sp[1])
         self._connect_time: float = 0.0
         self._target_ids: dict[str, int] = {}  # populated by connect() via SceneBuilder
         self._marker_id: int | None = None  # position marker for top-down recording

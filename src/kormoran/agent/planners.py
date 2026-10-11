@@ -37,11 +37,6 @@ class PlanContext(BaseModel):
     recalled: list[dict]
     safety_events: list[SafetyEvent]
     visited: list[dict]  # list of GridCell dicts {x_idx, y_idx}
-    # Geofence bounds — used by burst direction selection to avoid heading into walls.
-    geofence_x_min: float = -10.0
-    geofence_x_max: float = 10.0
-    geofence_y_min: float = -10.0
-    geofence_y_max: float = 10.0
 
 
 # ---------------------------------------------------------------------------
@@ -223,7 +218,7 @@ def _extract_usage(raw_msg: object | None) -> dict:
         }
     prompt = int(tu.get("prompt_tokens", 0))
     completion = int(tu.get("completion_tokens", 0))
-    # Approximate cost: gpt-4o-mini rates ($0.15/M input, $0.60/M output).
+    # Approximate cost (rough estimate, model-dependent).
     est_cost = prompt * 0.15e-6 + completion * 0.60e-6
     return {
         "prompt_tokens": prompt,
