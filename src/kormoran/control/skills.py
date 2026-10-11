@@ -12,6 +12,7 @@ Body-frame convention (matches DroneInterface.move_relative):
 from __future__ import annotations
 
 import logging
+import math
 
 from kormoran.interfaces import DroneInterface
 from kormoran.types import Detection, MoveResult, ScanResult
@@ -78,9 +79,39 @@ def advance(
     distance_m: float,
     timeout_s: float = _DEFAULT_MOVE_TIMEOUT_S,
 ) -> MoveResult:
-    """Move *distance_m* forward in the drone body frame (+x)."""
+    """Move *distance_m* forward in the drone body frame (+x).
+
+    Uses a short per-step timeout and checks forward progress so that wall
+    collisions are detected quickly instead of burning the full timeout.
+    Returns ``clamped / path blocked`` when the drone barely moved forward or
+    z dropped significantly (physics-ejection from a wall collision).
+    """
     logger.debug("skill advance distance_m=%.2f", distance_m)
-    return drone.move_relative(distance_m, 0.0, 0.0, timeout_s)
+    before = drone.get_state().pose
+    step_timeout = min(timeout_s, 3.0)
+    result = drone.move_relative(distance_m, 0.0, 0.0, step_timeout)
+
+    dz = result.pose.z - before.z
+    yaw_rad = math.radians(before.yaw_deg)
+    actual_dx = result.pose.x - before.x
+    actual_dy = result.pose.y - before.y
+    forward_progress = actual_dx * math.cos(yaw_rad) + actual_dy * math.sin(yaw_rad)
+
+    if dz < -0.2 or forward_progress < distance_m * 0.3:
+        logger.info(
+            "skill advance: path blocked (dz=%.2f fwd=%.2f vs %.2f)",
+            dz,
+            forward_progress,
+            distance_m,
+        )
+        return MoveResult(
+            status="clamped",
+            pose=result.pose,
+            elapsed_s=result.elapsed_s,
+            reason="path blocked",
+        )
+
+    return result
 
 
 def strafe(
@@ -135,6 +166,13 @@ def approach(
     from the detection's horizontal centre offset, so that successive approach
     calls converge the target toward the frame centre.
 
+    Progress tracking: uses a short per-step timeout and checks how far the
+    drone actually moved.  If z dropped by more than 0.2 m (crash into an
+    obstacle ejected the drone) or forward displacement is less than 30 % of
+    the commanded step (wall blocked the path), the result is returned as
+    ``clamped`` with reason ``"path blocked"`` so the caller can suppress
+    further approach attempts without waiting for the full timeout.
+
     Parameters
     ----------
     detection:
@@ -146,7 +184,34 @@ def approach(
     """
     step_m = max(0.1, min(step_m, 0.5))
     cx = detection.center_norm[0]  # horizontal offset: positive = right
-    # Small lateral correction: strafe left when target is right of centre.
     dy = -cx * step_m * 0.5
     logger.debug("skill approach step_m=%.2f cx=%.2f dy=%.2f", step_m, cx, dy)
-    return drone.move_relative(step_m, dy, 0.0, timeout_s)
+
+    before = drone.get_state().pose
+    # Use a short timeout so wall collisions fail fast instead of burning 10 s.
+    step_timeout = min(timeout_s, 3.0)
+    result = drone.move_relative(step_m, dy, 0.0, step_timeout)
+
+    # --- Progress check ---
+    dz = result.pose.z - before.z
+    yaw_rad = math.radians(before.yaw_deg)
+    actual_dx = result.pose.x - before.x
+    actual_dy = result.pose.y - before.y
+    # Project actual XY displacement onto the commanded forward direction.
+    forward_progress = actual_dx * math.cos(yaw_rad) + actual_dy * math.sin(yaw_rad)
+
+    if dz < -0.2 or forward_progress < step_m * 0.3:
+        logger.info(
+            "skill approach: path blocked (dz=%.2f fwd=%.2f vs %.2f)",
+            dz,
+            forward_progress,
+            step_m,
+        )
+        return MoveResult(
+            status="clamped",
+            pose=result.pose,
+            elapsed_s=result.elapsed_s,
+            reason="path blocked",
+        )
+
+    return result

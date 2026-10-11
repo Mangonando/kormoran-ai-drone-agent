@@ -34,14 +34,16 @@ geofence_margin_m: 0.3
 
 obstacles:
   # Wall-1: divider at x=0, covers y=[-2.0, 0.5] — gap at y=[0.5, 2.0] (north)
+  # Height 2.3 m: above geofence ceiling (2.2 m) so drone cannot fly over,
+  # but low enough for a clean top-down recording view.
   - shape: box
-    size: [0.15, 2.5, 2.8]
-    pose: [0.0, -0.75, 1.4]
+    size: [0.15, 2.5, 2.3]
+    pose: [0.0, -0.75, 1.15]
 
   # Wall-2: divider at x=1.5, covers y=[-0.5, 2.0] — gap at y=[-2.0, -0.5] (south)
   - shape: box
-    size: [0.15, 2.5, 2.8]
-    pose: [1.5, 0.75, 1.4]
+    size: [0.15, 2.5, 2.3]
+    pose: [1.5, 0.75, 1.15]
 
 targets:
   # Target 1 — easiest: visible from the start zone after one scan

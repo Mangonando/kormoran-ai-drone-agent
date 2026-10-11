@@ -224,6 +224,13 @@ class SkillExecutor:
                 timeout_s=timeout,
                 action_kind=kind,
             )
+        if kind == "takeoff":
+            altitude = dist if action.distance_m is not None else 1.0
+            return self._run_with_watchdog(
+                lambda: skills.takeoff(self._drone, altitude),
+                timeout_s=timeout,
+                action_kind=kind,
+            )
         if kind == "report_not_found":
             state = self._drone.get_state()
             return MoveResult(status="reached", pose=state.pose, elapsed_s=0.0)

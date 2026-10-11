@@ -14,8 +14,11 @@ from typing import TYPE_CHECKING
 from kormoran.agent.state import (
     FOUND_AREA_FRAC,
     FOUND_CENTER_TOL,
-    FOUND_CONSECUTIVE,
     GRID_CELL_SIZE_M,
+    MIN_FLIGHT_Z_M,
+    REFLEX_ALTITUDE_M,
+    REFLEX_AREA_FRAC,
+    REFLEX_LAND_FRAC,
     GridCell,
     MissionState,
     StepRecord,
@@ -84,6 +87,8 @@ def make_perceive_node(
         frame = drone.get_frame()
         if mission_logger is not None:
             mission_logger.add_frame(frame)
+            if hasattr(drone, "get_top_frame"):
+                mission_logger.add_top_frame(drone.get_top_frame())  # type: ignore[union-attr]
         detections = perceiver.detect(frame, target)
         observation = summarize(detections, target)
         drone_state: DroneState = drone.get_state()
@@ -129,6 +134,84 @@ def make_plan_node(planner: object, config: Settings) -> Callable[[MissionState]
             geofence_y_min=config.geofence_y_min,
             geofence_y_max=config.geofence_y_max,
         )
+
+        # ------------------------------------------------------------------
+        # Crash recovery reflex: if the drone is near ground level it has
+        # collided with an obstacle and been thrown down by the physics
+        # engine.  Re-takeoff before anything else so the mission can
+        # continue instead of burning all remaining steps on the ground.
+        # ------------------------------------------------------------------
+        if drone_state.pose.z < MIN_FLIGHT_Z_M:
+            logger.info(
+                "plan_node reflex: z=%.3f < %.1f → takeoff (crash recovery)",
+                drone_state.pose.z,
+                MIN_FLIGHT_Z_M,
+            )
+            return {
+                "last_action": Action(
+                    kind="takeoff",
+                    reasoning="reflex: drone near ground — re-taking off to recover altitude",
+                    confidence=1.0,
+                ).model_dump()
+            }
+
+        # ------------------------------------------------------------------
+        # Approach reflex: bypass the planner when the target is visible.
+        # Sequence: descend to approach altitude first, then approach.
+        # No LLM call is made — this saves tokens and reacts immediately.
+        #
+        # Suppressed if the previous approach was clamped (timed-out): that
+        # signals the path is blocked (e.g. a wall between the drone and the
+        # apparent target position).  Fall through to the planner so it can
+        # rotate and find a clear route.
+        # ------------------------------------------------------------------
+        # Suppress approach if any of the last 3 steps was a clamped approach.
+        # Checking a window (rather than just last_action) handles the case where
+        # a crash-recovery climb fires between the blocked approach and the next
+        # plan decision — the climb resets last_action but the wall is still there.
+        approach_blocked = any(
+            r["action_kind"] == "approach" and r["result_status"] == "clamped"
+            for r in list(state.get("recent_steps", []))[-3:]
+        )
+
+        reflex_action: Action | None = None
+        if detections and detections[0].area_frac >= REFLEX_AREA_FRAC and not approach_blocked:
+            area = detections[0].area_frac
+            descent_needed = drone_state.pose.z - REFLEX_ALTITUDE_M
+            if area >= REFLEX_LAND_FRAC and state.get("consecutive_found", 0) >= 1:
+                # Drone is right on top of the target and has already confirmed
+                # at least one qualifying frame — land to finalise the find.
+                reflex_action = Action(
+                    kind="land",
+                    reasoning="reflex: target fills frame — landing to confirm",
+                    confidence=1.0,
+                )
+            elif descent_needed >= 0.2:
+                reflex_action = Action(
+                    kind="descend",
+                    distance_m=round(min(descent_needed, 2.0), 2),
+                    reasoning="reflex: target spotted — descending to approach altitude",
+                    confidence=1.0,
+                )
+            else:
+                reflex_action = Action(
+                    kind="approach",
+                    reasoning="reflex: target spotted — approaching",
+                    confidence=1.0,
+                )
+            logger.info(
+                "plan_node reflex: area_frac=%.3f → %s",
+                detections[0].area_frac,
+                reflex_action.kind,
+            )
+
+        if approach_blocked and detections:
+            logger.info(
+                "plan_node: approach suppressed (previous approach clamped) — falling to planner"
+            )
+
+        if reflex_action is not None:
+            return {"last_action": reflex_action.model_dump()}
 
         try:
             action: Action = planner.plan(ctx)  # type: ignore[union-attr]
@@ -343,7 +426,9 @@ def make_check_node() -> Callable[[MissionState], dict]:
         if step >= max_steps:
             return {"status": "not_found"}
 
-        # Found criterion: detection large + centred for FOUND_CONSECUTIVE steps.
+        # Update consecutive_found counter so the land reflex knows when to fire.
+        # "found" is only declared via land (voluntary or reflex) + consecutive_found > 0,
+        # forcing the drone to physically reach the target before the mission ends.
         detections = state["last_detections"]
         consecutive = state["consecutive_found"]
         if detections:
@@ -355,15 +440,9 @@ def make_check_node() -> Callable[[MissionState], dict]:
             else:
                 cx_val = 0.0
             center_ok = abs(cx_val) <= FOUND_CENTER_TOL
-            if area_ok and center_ok:
-                consecutive += 1
-            else:
-                consecutive = 0
+            consecutive = consecutive + 1 if (area_ok and center_ok) else 0
         else:
             consecutive = 0
-
-        if consecutive >= FOUND_CONSECUTIVE:
-            return {"status": "found", "consecutive_found": consecutive}
 
         return {"status": "flying", "consecutive_found": consecutive}
 

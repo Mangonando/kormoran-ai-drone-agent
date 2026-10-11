@@ -311,6 +311,10 @@ def run_mission(
                 gif_path = Path(settings.data_dir) / "missions" / f"{mission_id}.gif"
                 save_gif(mission_logger.frames, gif_path, fps=2, scale=4, loop=1)
                 typer.echo(f"  GIF      : {gif_path}")
+            if mission_logger.top_frames:
+                top_path = Path(settings.data_dir) / "missions" / f"{mission_id}_top.gif"
+                save_gif(mission_logger.top_frames, top_path, fps=2, scale=4, loop=1)
+                typer.echo(f"  Top GIF  : {top_path}")
 
         if status not in ("found",):
             raise typer.Exit(code=1)

@@ -80,10 +80,15 @@ class MissionLogger:
         self._path = log_path
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self.frames: list[Frame] = []
+        self.top_frames: list[Frame] = []
 
     def add_frame(self, frame: Frame) -> None:
-        """Collect a frame for GIF export at mission end."""
+        """Collect a drone-camera frame for GIF export at mission end."""
         self.frames.append(frame)
+
+    def add_top_frame(self, frame: Frame) -> None:
+        """Collect a top-down overview frame for GIF export at mission end."""
+        self.top_frames.append(frame)
 
     def log_step(
         self,

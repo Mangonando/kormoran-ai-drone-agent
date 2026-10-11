@@ -33,6 +33,11 @@ _IMG_W: int = 128
 _IMG_H: int = 96
 _IMG_FOV_DEG: float = 60.0
 
+# Top-down overview camera resolution
+_TOP_W: int = 128
+_TOP_H: int = 128
+_TOP_FOV_DEG: float = 30.0
+
 # PID convergence tolerances
 _TOL_POS_M: float = 0.05  # position within 5 cm
 _TOL_YAW_RAD: float = math.radians(5.0)  # yaw within 5 degrees
@@ -84,9 +89,13 @@ class SimDrone:
         self._env: object | None = None  # CtrlAviary, typed as object to avoid top-level import
         self._ctrl: object | None = None  # DSLPIDControl
         self._is_flying: bool = False
+        # Safe recovery position — set from scenario start pose at connect() time.
+        _sp = self._scenario.start_pose
+        self._recovery_x: float = float(_sp[0])
+        self._recovery_y: float = float(_sp[1])
         self._connect_time: float = 0.0
         self._target_ids: dict[str, int] = {}  # populated by connect() via SceneBuilder
-        self._marker_id: int | None = None  # GUI-only visual marker to make the drone visible
+        self._marker_id: int | None = None  # position marker for top-down recording
         self._gui_step_dt: float = 0.0  # sleep per step in GUI mode to avoid M1 GPU crash
 
     # ------------------------------------------------------------------
@@ -129,29 +138,30 @@ class SimDrone:
         builder = SceneBuilder(self._scenario, self._seed)
         self._target_ids = builder.build(self._env.CLIENT)  # type: ignore[union-attr]
 
-        # GUI-only: attach a large bright-orange sphere so the drone is easy to spot
-        if self._gui:
-            import pybullet as p
-
-            vis_id = p.createVisualShape(
-                shapeType=p.GEOM_SPHERE,
-                radius=0.3,
-                rgbaColor=[1.0, 0.5, 0.0, 0.9],
-                physicsClientId=self._env.CLIENT,  # type: ignore[union-attr]
-            )
-            self._marker_id = p.createMultiBody(
-                baseMass=0,
-                baseCollisionShapeIndex=-1,
-                baseVisualShapeIndex=vis_id,
-                basePosition=[sp[0], sp[1], 0.35],
-                physicsClientId=self._env.CLIENT,  # type: ignore[union-attr]
-            )
-
         # In GUI mode, pace the inner PID loop to real-time to prevent M1 GPU segfault.
         # The tight _step() loop would otherwise fire hundreds of PyBullet + Metal calls
         # per second from the agent thread, overwhelming the renderer.
         if self._gui:
             self._gui_step_dt = 1.0 / self._env.CTRL_FREQ  # type: ignore[union-attr]
+
+        # Orange sphere marker — visible in top-down GIF and GUI.
+        # Radius 0.12 m ≈ 3× the drone arm length (0.04 m) for visibility.
+        # Always created so headless top-down recording shows the drone position.
+        import pybullet as p
+
+        vis_id = p.createVisualShape(
+            shapeType=p.GEOM_SPHERE,
+            radius=0.12,
+            rgbaColor=[1.0, 0.5, 0.0, 0.9],
+            physicsClientId=self._env.CLIENT,  # type: ignore[union-attr]
+        )
+        self._marker_id = p.createMultiBody(
+            baseMass=0,
+            baseCollisionShapeIndex=-1,
+            baseVisualShapeIndex=vis_id,
+            basePosition=[sp[0], sp[1], 0.35],
+            physicsClientId=self._env.CLIENT,  # type: ignore[union-attr]
+        )
 
         self._connect_time = time.monotonic()
         logger.info("SimDrone connected (gui=%s, scene=%s)", self._gui, self._scenario.scene_id)
@@ -166,6 +176,61 @@ class SimDrone:
     def takeoff(self, altitude_m: float) -> MoveResult:
         self._require_connected()
         state = self._get_state_vec()
+
+        # If the drone has crashed to near-ground level it may be physically
+        # stuck (clipped into a wall or floor by the physics engine).  A PID
+        # force cannot free it, so we teleport it to a safe altitude first.
+        # Guard: only reset if the drone was previously flying — on the very
+        # first takeoff z ≈ 0.05 (ground) which must NOT trigger a reset.
+        if self._is_flying and state[2] < 0.3:
+            import pybullet as p
+
+            drone_id = self._env.DRONE_IDS[0]  # type: ignore[union-attr]
+            # Teleport to the scenario start position — always guaranteed to be
+            # obstacle-free.  The crash orientation is unreliable (the drone may
+            # have tumbled), so nudging along it often lands the drone back on
+            # the same wall.  Starting from a known-safe XY avoids that entirely.
+            safe_x = self._recovery_x
+            safe_y = self._recovery_y
+            # Use identity orientation (flat, upright) rather than the
+            # crashed drone's quaternion, which may be inverted — an inverted
+            # drone applies thrust downward and can never recover altitude.
+            p.resetBasePositionAndOrientation(
+                drone_id,
+                [safe_x, safe_y, altitude_m * 0.5],
+                [0.0, 0.0, 0.0, 1.0],
+                physicsClientId=self._env.CLIENT,  # type: ignore[union-attr]
+            )
+            # Zero out residual crash velocity.
+            p.resetBaseVelocity(
+                drone_id,
+                linearVelocity=[0.0, 0.0, 0.0],
+                angularVelocity=[0.0, 0.0, 0.0],
+                physicsClientId=self._env.CLIENT,  # type: ignore[union-attr]
+            )
+            # Reinitialise the PID controller to clear integral wind-up
+            # accumulated while fighting the crash.
+            from gym_pybullet_drones.control.DSLPIDControl import DSLPIDControl
+            from gym_pybullet_drones.utils.enums import DroneModel
+
+            self._ctrl = DSLPIDControl(drone_model=DroneModel.CF2X)
+            # Force-update CtrlAviary's internal kinematic cache to match the
+            # physics reset.  _getDroneStateVector() reads from cached arrays
+            # (env.pos, env.quat, …) that are only refreshed by env.step().
+            # Without this, the first _fly_to() call computes the target from
+            # the stale crash position and flies toward it, causing another crash.
+            self._env._updateAndStoreKinematicInformation()  # type: ignore[union-attr]
+            logger.info(
+                "SimDrone: physics-reset from (%.2f, %.2f, %.3f) → (%.2f, %.2f, %.2f)",
+                state[0],
+                state[1],
+                state[2],
+                safe_x,
+                safe_y,
+                altitude_m * 0.5,
+            )
+            state = self._get_state_vec()
+
         target = np.array([state[0], state[1], altitude_m])
         result = self._fly_to(target, tol=_TOL_POS_M, timeout_s=15.0)
         if result.status != "aborted":
@@ -246,6 +311,46 @@ class SimDrone:
         frame = Frame(image=rgb, t=elapsed, fov_deg=_IMG_FOV_DEG)
         return frame, seg, dict(self._target_ids)
 
+    def get_top_frame(self) -> Frame:
+        """Return a top-down overview frame centred on the room.
+
+        Uses a fixed overhead camera computed from the scenario room bounds so
+        the full room always fits in frame.  Always uses ``ER_TINY_RENDERER``
+        so it is safe in both GUI and headless modes.
+        """
+        import pybullet as p
+
+        room = self._scenario.room
+        cx = (room.x[0] + room.x[1]) / 2.0
+        cy = (room.y[0] + room.y[1]) / 2.0
+        room_span = max(room.x[1] - room.x[0], room.y[1] - room.y[0])
+        # Height so the room fits inside the FOV with a small margin.
+        height = (room_span / 2.0) / math.tan(math.radians(_TOP_FOV_DEG / 2.0)) * 1.1
+
+        view = p.computeViewMatrix(
+            cameraEyePosition=[cx, cy, height],
+            cameraTargetPosition=[cx, cy, 0.0],
+            cameraUpVector=[0.0, 1.0, 0.0],
+            physicsClientId=self._env.CLIENT,  # type: ignore[union-attr]
+        )
+        proj = p.computeProjectionMatrixFOV(
+            fov=_TOP_FOV_DEG,
+            aspect=1.0,
+            nearVal=0.1,
+            farVal=height + 1.0,
+        )
+        w, h, rgb, _, _ = p.getCameraImage(
+            width=_TOP_W,
+            height=_TOP_H,
+            viewMatrix=view,
+            projectionMatrix=proj,
+            renderer=p.ER_TINY_RENDERER,
+            physicsClientId=self._env.CLIENT,  # type: ignore[union-attr]
+        )
+        rgb_arr: NDArray[np.uint8] = np.reshape(np.array(rgb, dtype=np.uint8), (h, w, 4))
+        elapsed = time.monotonic() - self._connect_time
+        return Frame(image=rgb_arr[:, :, :3], t=elapsed, fov_deg=_TOP_FOV_DEG)
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -269,10 +374,7 @@ class SimDrone:
         )
         self._env.step(np.array([rpm]))  # type: ignore[union-attr]
 
-        # Pace to real-time in GUI mode so the Metal renderer can keep up (M1 fix)
-        if self._gui_step_dt > 0.0:
-            time.sleep(self._gui_step_dt)
-
+        # Update orange sphere marker to follow the drone.
         if self._marker_id is not None:
             import pybullet as p
 
@@ -283,6 +385,10 @@ class SimDrone:
                 [0.0, 0.0, 0.0, 1.0],
                 physicsClientId=self._env.CLIENT,  # type: ignore[union-attr]
             )
+
+        # Pace to real-time in GUI mode so the Metal renderer can keep up (M1 fix)
+        if self._gui_step_dt > 0.0:
+            time.sleep(self._gui_step_dt)
 
     def _capture_camera(self, segmentation: bool = False) -> tuple[object, object, object]:
         """Replicate _getDroneImages but force ER_TINY_RENDERER.

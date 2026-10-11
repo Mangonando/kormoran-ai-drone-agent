@@ -67,6 +67,7 @@ class Action(BaseModel):
         "rotate",
         "approach",
         "land",
+        "takeoff",
         "report_not_found",
     ]
     distance_m: float | None = Field(None, ge=0.2, le=2.0)

@@ -410,3 +410,41 @@ user message nor the prompt told the LLM to use it.
 **Consequences:** The LLM now has explicit spatial feedback on where it has and hasn't been.
 UNEXPLORED flags create a strong directional signal to break the tendency to scan in circles.
 The coverage summary is O(n) over visited cells and adds negligible overhead.
+
+---
+
+2026-10-11 — Strip hardcoded heuristics from LLMPlanner; prompt v7
+
+**Context:** The LLMPlanner had accumulated extensive hardcoded logic — burst sequences,
+zone detection, south traverse, geofence rotation guards, no-advance guards, and
+apartment-specific zone context in the user message.  Most decisions never reached the LLM;
+the planner was effectively a second HeuristicPlanner with occasional LLM calls.  This
+violated the roadmap's two-loop design where "the LLM sees a text rendering of the world
+and returns one Action" for ALL strategic decisions.  Testing showed the hardcoded LLMPlanner
+performed worse than the pure HeuristicPlanner (0/3 targets found vs 2/3 on apartment_v1).
+
+**Decision:** Remove all hardcoded overrides from `LLMPlanner.plan()`.  The method now only:
+builds the user message, calls the LLM with structured output, retries once on failure, and
+falls back to `scan`.  No bursts, no zone tracking, no forced rotations, no periodic scan
+override.  Removed: `_committed_advances`, `_burst_target_yaw`, `_nz_burst_yaw`,
+`_consecutive_geo`, `_last_geo_count`, `_least_visited_quadrant_yaw()`.  Also removed
+apartment-specific "ZONE ALERT" from `_build_user_message`.
+
+Prompt bumped to v7 (scenario-agnostic):
+- Removed hardcoded position references (x=-2, y=0).
+- Added "How the reflex system works" section so the LLM understands it is not called during
+  approach sequences and that position jumps mean crash-recovery teleports.
+- Added "After losing a detection: SCAN immediately to re-acquire" rule.
+- Simplified wall-navigation guidance to be generic (no specific x/y coordinates).
+- Removed "commit to 3 advances" rule — the LLM decides its own movement strategy.
+
+What stays hardcoded (in plan_node, not LLMPlanner):
+- Crash recovery reflex: z < 0.3 m -> takeoff.
+- Approach/descend/land reflex: target visible with area_frac >= 0.002 -> approach.
+- Safety supervisor in validate node: geofence, battery, budgets.
+
+**Consequences:** The LLM is now consulted on every non-reflex step.  LLM calls per mission
+increase (37 for red cube vs 21 before).  Blue sphere went from not_found to found (17 steps).
+Yellow cylinder and red cube remain not_found in 50 steps — navigating multi-gap walls is
+genuinely hard and may need more steps, a better model, or long-term memory (M5).
+Cost per mission increases slightly (~$0.01) but is well within the $0.50 budget cap.
