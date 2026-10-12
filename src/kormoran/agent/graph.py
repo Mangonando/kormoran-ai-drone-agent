@@ -27,8 +27,8 @@ from kormoran.agent.nodes import (
     make_perceive_node,
     make_plan_node,
     make_recall_memory_node,
+    make_reflect_node,
     make_validate_node,
-    reflect_node,
     route_check,
 )
 from kormoran.agent.state import MissionState, TokenUsage
@@ -38,6 +38,8 @@ if TYPE_CHECKING:
 
     from kormoran.config import Settings
     from kormoran.interfaces import DroneInterface, Perceiver
+    from kormoran.memory.episodic import EpisodicStore
+    from kormoran.memory.semantic import SemanticStore
     from kormoran.recording import MissionLogger
     from kormoran.types import DroneState, TargetSpec
 
@@ -51,6 +53,9 @@ def build_mission_graph(
     mission_logger: MissionLogger | None = None,
     checkpointer: object | None = None,
     interrupt_after: list[str] | None = None,
+    episodic: EpisodicStore | None = None,
+    semantic: SemanticStore | None = None,
+    reflection_llm: object | None = None,
 ) -> CompiledStateGraph:
     """Compile and return the LangGraph mission graph.
 
@@ -68,20 +73,30 @@ def build_mission_graph(
         LangGraph checkpointer; defaults to MemorySaver (in-process).
     interrupt_after:
         List of node names to interrupt after (for testing crash/resume).
+    episodic:
+        EpisodicStore for SQLite mission records; None disables persistence.
+    semantic:
+        SemanticStore for ChromaDB notes; None disables recall and reflection.
+    reflection_llm:
+        LangChain LLM used to generate post-mission MemoryNotes; None skips
+        LLM reflection (episodic record still stored if *episodic* is set).
     """
     from kormoran.control.executor import SkillExecutor
 
-    executor = SkillExecutor(drone, config)
+    executor = SkillExecutor(drone, config, perceiver=perceiver)
 
     builder: StateGraph = StateGraph(MissionState)
 
-    builder.add_node("recall_memory", make_recall_memory_node())
+    builder.add_node("recall_memory", make_recall_memory_node(semantic))
     builder.add_node("perceive", make_perceive_node(drone, perceiver, mission_logger))
     builder.add_node("plan", make_plan_node(planner, config))
     builder.add_node("validate", make_validate_node(config))
     builder.add_node("act", make_act_node(executor, perceiver, mission_logger))
     builder.add_node("check", make_check_node())
-    builder.add_node("reflect_and_store", reflect_node)
+    builder.add_node(
+        "reflect_and_store",
+        make_reflect_node(episodic=episodic, semantic=semantic, llm=reflection_llm),
+    )
 
     builder.set_entry_point("recall_memory")
     builder.add_edge("recall_memory", "perceive")

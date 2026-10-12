@@ -98,9 +98,17 @@ class RoomBounds(BaseModel):
     z: list[float]
 
 
-class RandomizeConfig(BaseModel):
-    targets: bool = True
-    seed_from_cli: bool = True
+class GeofenceOverride(BaseModel):
+    """Per-scenario geofence bounds (metres, world frame).
+
+    All four fields are required when the block is present so a partial
+    override cannot silently leave one axis at the Settings default.
+    """
+
+    x_min: float
+    x_max: float
+    y_min: float
+    y_max: float
 
 
 class ScenarioConfig(BaseModel):
@@ -108,11 +116,10 @@ class ScenarioConfig(BaseModel):
 
     scene_id: str
     room: RoomBounds
-    geofence_margin_m: float = 0.3
+    geofence: GeofenceOverride | None = None  # per-scenario geofence override (M5)
     obstacles: list[ObstacleSpec] = []
     targets: list[ScenarioTargetSpec] = []
     start_pose: list[float] = Field(default_factory=lambda: [0.0, 0.0, 0.0, 0.0])
-    randomize: RandomizeConfig = Field(default_factory=RandomizeConfig)
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> ScenarioConfig:

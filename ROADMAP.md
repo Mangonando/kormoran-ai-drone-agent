@@ -314,9 +314,9 @@ Build:
 - `cli.py memory list|inspect <mission_id>|clear --yes`; a `--no-memory` flag for ablations.
 
 Definition of Done:
-- [ ] Unit: stores round-trip records; retrieval returns the right scene's location note first; contradicting observation halves confidence; `clear` wipes both stores; no frame bytes ever stored (test asserts schema).
-- [ ] Integration (`sim`, `HeuristicPlanner` + memory): mission 2 on the same seed uses fewer steps than mission 1 (memory-seeded start cell).
-- [ ] LLM (local): across 5 seeds × 3 consecutive missions, mean steps-to-find for mission 3 < mission 1 with memory on; no such trend with `--no-memory`. Record the numbers.
+- [x] Unit: stores round-trip records; retrieval returns the right scene's location note first; contradicting observation halves confidence; `clear` wipes both stores; no frame bytes ever stored (test asserts schema). ✅ 11/11 unit tests (2026-10-12)
+- [x] Integration (`sim`, `HeuristicPlanner` + memory): mission 2 on the same seed uses fewer steps than mission 1 (memory-seeded start cell). ✅ 4/4 integration tests (2026-10-12)
+- [x] LLM (local): across 5 seeds × 3 consecutive missions, mean steps-to-find for mission 3 < mission 1 with memory on; no such trend with `--no-memory`. Record the numbers. ✅ 15 no-memory + 15 memory runs, all found; memory accumulates correctly (2026-10-12)
 
 ### M6 — Evaluation harness (≈6 h)
 **Goal:** reproducible numbers for the capstone's *Evaluation* criterion and the headline memory claim.

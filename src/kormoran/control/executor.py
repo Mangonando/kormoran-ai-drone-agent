@@ -56,9 +56,15 @@ class SkillExecutor:
         Settings instance used to pull geofence bounds for the supervisor.
     """
 
-    def __init__(self, drone: DroneInterface, config: Settings) -> None:
+    def __init__(
+        self,
+        drone: DroneInterface,
+        config: Settings,
+        perceiver: object | None = None,
+    ) -> None:
         self._drone = drone
         self._config = config
+        self._perceiver = perceiver
         self.safety_events: list[SafetyEvent] = []
 
     # ------------------------------------------------------------------
@@ -70,6 +76,7 @@ class SkillExecutor:
         action: Action,
         state: DroneState,
         detection: Detection | None = None,
+        target: object | None = None,
     ) -> MoveResult | ScanResult:
         """Execute *action* after vetting it through the safety supervisor.
 
@@ -105,7 +112,7 @@ class SkillExecutor:
                 verdict.reason,
             )
 
-        result = self._dispatch(effective, detection)
+        result = self._dispatch(effective, detection, target)
 
         # Drift recovery: scan and rotate can cause small physical displacements
         # that push the drone through the geofence margin into the physical wall.
@@ -159,6 +166,7 @@ class SkillExecutor:
         self,
         action: Action,
         detection: Detection | None,
+        target: object | None = None,
     ) -> MoveResult | ScanResult:
         """Route *action* to the matching skill, wrapped in a watchdog."""
         kind = action.kind
@@ -219,8 +227,10 @@ class SkillExecutor:
                     reason="approach called without a detection",
                 )
             det = detection  # capture for lambda
+            pcv = self._perceiver
+            tgt = target
             return self._run_with_watchdog(
-                lambda: skills.approach(self._drone, det, dist, timeout),
+                lambda: skills.approach(self._drone, det, dist, timeout, pcv, tgt),
                 timeout_s=timeout,
                 action_kind=kind,
             )

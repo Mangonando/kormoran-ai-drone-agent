@@ -30,8 +30,6 @@ room:
   x: [-2.5, 2.5]
   y: [-2.0, 2.0]
   z: [0.0, 3.0]
-geofence_margin_m: 0.3
-
 obstacles:
   # Wall-1: divider at x=0, covers y=[-2.0, 0.5] — gap at y=[0.5, 2.0] (north)
   # Height 2.3 m: above geofence ceiling (2.2 m) so drone cannot fly over,
@@ -68,6 +66,3 @@ targets:
     zone: [[1.7, 2.2], [-1.5, 1.5], [0.5, 0.5]]
 
 start_pose: [-2.0, 0.0, 0.0, 0.0]
-randomize:
-  targets: true
-  seed_from_cli: true

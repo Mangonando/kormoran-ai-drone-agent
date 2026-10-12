@@ -7,9 +7,12 @@ may depend on.  Concrete backends (SimDrone, MockDrone, TelloDrone) live in
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from kormoran.types import Action, Detection, DroneState, Frame, MoveResult, TargetSpec
+
+if TYPE_CHECKING:
+    from kormoran.agent.planners import PlanContext
 
 
 @runtime_checkable
@@ -76,6 +79,6 @@ class Perceiver(Protocol):
 class Planner(Protocol):
     """Decides the next action given the current mission context."""
 
-    def plan(self, ctx: object) -> Action:
-        """Return the next validated ``Action``.  *ctx* is a ``PlanContext`` (M4)."""
+    def plan(self, ctx: PlanContext) -> Action:
+        """Return the next validated ``Action``."""
         ...

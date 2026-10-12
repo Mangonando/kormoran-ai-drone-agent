@@ -196,11 +196,37 @@ class HeuristicPlanner:
 # LLMPlanner
 # ---------------------------------------------------------------------------
 
-_FALLBACK_ACTION = Action(
-    kind="scan",
-    reasoning="LLM output invalid after retry — falling back to scan",
-    confidence=0.3,
-)
+_FALLBACK_ACTIONS = [
+    Action(kind="scan", reasoning="LLM fallback: scanning to reorient", confidence=0.3),
+    Action(
+        kind="advance",
+        distance_m=0.8,
+        reasoning="LLM fallback: advancing to new position",
+        confidence=0.3,
+    ),
+    Action(
+        kind="rotate",
+        angle_deg=90.0,
+        reasoning="LLM fallback: rotating to new heading",
+        confidence=0.3,
+    ),
+    Action(
+        kind="advance", distance_m=0.8, reasoning="LLM fallback: advancing again", confidence=0.3
+    ),
+    Action(kind="scan", reasoning="LLM fallback: scanning from new position", confidence=0.3),
+    Action(
+        kind="rotate",
+        angle_deg=-90.0,
+        reasoning="LLM fallback: rotating opposite direction",
+        confidence=0.3,
+    ),
+    Action(
+        kind="advance",
+        distance_m=0.8,
+        reasoning="LLM fallback: advancing in new direction",
+        confidence=0.3,
+    ),
+]
 
 
 def _extract_usage(raw_msg: object | None) -> dict:
@@ -243,6 +269,7 @@ class LLMPlanner:
     def __init__(self, llm: object) -> None:
         self._llm = llm  # ChatOpenAI instance
         self.last_token_usage: dict = {}
+        self._consecutive_failures: int = 0
 
     def plan(self, ctx: PlanContext) -> Action:
         chain = self._llm.with_structured_output(Action, include_raw=True)  # type: ignore[union-attr]
@@ -265,16 +292,26 @@ class LLMPlanner:
                     raise ValueError(f"expected Action, got {type(parsed)}")
                 raw_msg = raw_result.get("raw") if isinstance(raw_result, dict) else None
                 self.last_token_usage = _extract_usage(raw_msg)
+                self._consecutive_failures = 0
                 return parsed
             except Exception as exc:  # noqa: BLE001
-                logger.warning("LLMPlanner attempt %d failed: %s", attempt + 1, exc)
+                logger.warning(
+                    "LLMPlanner attempt %d failed: %s: %s", attempt + 1, type(exc).__name__, exc
+                )
                 if attempt == 0:
                     continue
                 break
 
-        logger.warning("LLMPlanner: falling back to scan after 2 failures")
+        # Cycle through fallback actions instead of repeating scan forever.
+        fallback = _FALLBACK_ACTIONS[self._consecutive_failures % len(_FALLBACK_ACTIONS)]
+        self._consecutive_failures += 1
+        logger.warning(
+            "LLMPlanner: %d consecutive failure(s) — fallback: %s",
+            self._consecutive_failures,
+            fallback.kind,
+        )
         self.last_token_usage = {}
-        return _FALLBACK_ACTION
+        return fallback
 
     @staticmethod
     def _coverage_summary(visited: list[dict]) -> str:
@@ -324,12 +361,25 @@ class LLMPlanner:
         ]
         wall_hints = "near " + "; ".join(clamped[-10:]) if clamped else "none yet"
 
+        # Format recalled memory notes (may be stale).
+        if ctx.recalled:
+            memory_lines = []
+            for note in ctx.recalled[:5]:
+                conf = note.get("confidence", 0)
+                text = note.get("text", "")
+                kind = note.get("kind", "?")
+                memory_lines.append(f"  [{kind}] (conf={conf:.2f}) {text}")
+            memory_str = "\n".join(memory_lines)
+        else:
+            memory_str = "none"
+
         return (
             f"Target: {ctx.target.label}\n"
             f"Step: {ctx.step}/{ctx.max_steps}\n"
             f"Pose: x={pose.x:.2f} y={pose.y:.2f} z={pose.z:.2f} yaw={pose.yaw_deg:.1f}°\n"
             f"Perception: {det_str}\n"
             f"Observation: {ctx.observation}\n"
+            f"Prior knowledge (may be stale):\n{memory_str}\n"
             f"Recent history: {recent}\n"
             f"Known obstacles (from blocked advances): {wall_hints}\n"
             f"Safety alerts (recent): {safety_str}\n"

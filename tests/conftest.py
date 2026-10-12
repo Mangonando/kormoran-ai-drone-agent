@@ -2,9 +2,39 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 
 import pytest
+
+# ---------------------------------------------------------------------------
+# Shared ChromaDB test helpers (used by test_memory.py + test_memory_heuristic.py)
+# ---------------------------------------------------------------------------
+
+
+def _embed_texts(texts: list[str]) -> list[list[float]]:
+    """Deterministic hash-based 32-dim embedding (no model download)."""
+    return [[float(b - 128) / 128.0 for b in hashlib.sha256(t.encode()).digest()] for t in texts]
+
+
+class DummyEmbeddingFunction:
+    """ChromaDB-compatible deterministic embedding function for tests.
+
+    ChromaDB 1.5 calls embed_query() for queries and embed_documents() (or
+    __call__) for documents.
+    """
+
+    def name(self) -> str:  # noqa: D102
+        return "dummy"
+
+    def __call__(self, input: list[str]) -> list[list[float]]:  # noqa: A002
+        return _embed_texts(input)
+
+    def embed_query(self, input: list[str]) -> list[list[float]]:  # noqa: A002
+        return _embed_texts(input)
+
+    def embed_documents(self, input: list[str]) -> list[list[float]]:  # noqa: A002
+        return _embed_texts(input)
 
 
 def _openrouter_key_available() -> bool:

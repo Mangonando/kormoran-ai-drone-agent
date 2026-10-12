@@ -8,6 +8,7 @@ the only place that knows about backends.
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -30,6 +31,8 @@ if TYPE_CHECKING:
     from kormoran.config import Settings
     from kormoran.control.executor import SkillExecutor
     from kormoran.interfaces import DroneInterface, Perceiver
+    from kormoran.memory.episodic import EpisodicStore
+    from kormoran.memory.semantic import SemanticStore
     from kormoran.recording import MissionLogger
 
 logger = logging.getLogger(__name__)
@@ -47,6 +50,97 @@ def _best_detection(detections: list[Detection]) -> Detection | None:
     return max(detections, key=lambda d: d.confidence * d.area_frac)
 
 
+def _detect_walls(
+    recent_steps: list[StepRecord],
+    cluster_tol: float = 0.3,
+    min_hits: int = 2,
+) -> list[tuple[str, float]]:
+    """Return a list of detected walls from clamped advance/approach positions.
+
+    Each wall is ``("x", value)`` or ``("y", value)`` indicating a vertical or
+    horizontal wall at the given world coordinate.
+    """
+    clamped = [
+        r
+        for r in recent_steps
+        if r["result_status"] == "clamped" and r["action_kind"] in ("advance", "approach")
+    ]
+    walls: list[tuple[str, float]] = []
+    # Vertical walls (constant x)
+    xs = sorted(r["pose_x"] for r in clamped)
+    for x0 in xs:
+        hits = [x for x in xs if abs(x - x0) < cluster_tol]
+        if len(hits) >= min_hits:
+            wall_x = sum(hits) / len(hits)
+            if not any(axis == "x" and abs(val - wall_x) < cluster_tol for axis, val in walls):
+                walls.append(("x", wall_x))
+    # Horizontal walls (constant y)
+    ys = sorted(r["pose_y"] for r in clamped)
+    for y0 in ys:
+        hits = [y for y in ys if abs(y - y0) < cluster_tol]
+        if len(hits) >= min_hits:
+            wall_y = sum(hits) / len(hits)
+            if not any(axis == "y" and abs(val - wall_y) < cluster_tol for axis, val in walls):
+                walls.append(("y", wall_y))
+    return walls
+
+
+def _wall_avoidance_guardrail(
+    action: Action,
+    recent_steps: list[StepRecord],
+    drone_state: DroneState,
+) -> Action:
+    """Override an advance that would head into a known wall.
+
+    If the drone's heading points toward a detected wall (within ±45°),
+    redirect to advance parallel to the wall instead.
+    """
+    walls = _detect_walls(recent_steps)
+    if not walls:
+        return action
+
+    yaw_rad = math.radians(drone_state.pose.yaw_deg)
+    dx = math.cos(yaw_rad)
+    dy = math.sin(yaw_rad)
+    px, py = drone_state.pose.x, drone_state.pose.y
+
+    for axis, val in walls:
+        if axis == "x":
+            # Vertical wall at x=val — blocked if heading toward it
+            if abs(px - val) < 1.5 and dx * (val - px) > 0.3:
+                # Heading toward the wall.  Redirect parallel (along y).
+                parallel_angle = 90.0 if dy >= 0 else -90.0
+                logger.info(
+                    "plan_node guardrail: advance blocked by wall at x≈%.1f "
+                    "→ rotating %.0f° to fly parallel",
+                    val,
+                    parallel_angle,
+                )
+                return Action(
+                    kind="rotate",
+                    angle_deg=parallel_angle - drone_state.pose.yaw_deg,
+                    reasoning=f"guardrail: wall at x≈{val:.1f} — rotating to fly parallel",
+                    confidence=1.0,
+                )
+        elif axis == "y":
+            if abs(py - val) < 1.5 and dy * (val - py) > 0.3:
+                parallel_angle = 0.0 if dx >= 0 else 180.0
+                logger.info(
+                    "plan_node guardrail: advance blocked by wall at y≈%.1f "
+                    "→ rotating %.0f° to fly parallel",
+                    val,
+                    parallel_angle,
+                )
+                return Action(
+                    kind="rotate",
+                    angle_deg=parallel_angle - drone_state.pose.yaw_deg,
+                    reasoning=f"guardrail: wall at y≈{val:.1f} — rotating to fly parallel",
+                    confidence=1.0,
+                )
+
+    return action
+
+
 def _cell_from_pose(x: float, y: float) -> GridCell:
     # Use round() instead of floor() so sub-millimetre PID drift at cell boundaries
     # (e.g. x = -0.0001 after a scan at the origin) does not falsely record the
@@ -58,13 +152,45 @@ def _cell_from_pose(x: float, y: float) -> GridCell:
 
 
 # ---------------------------------------------------------------------------
-# recall_memory node (stub — M5 will fill this in)
+# recall_memory node
 # ---------------------------------------------------------------------------
 
 
-def make_recall_memory_node() -> Callable[[MissionState], dict]:
-    def recall_memory_node(state: MissionState) -> dict:  # noqa: ARG001
-        return {"recalled": []}
+def make_recall_memory_node(
+    semantic: SemanticStore | None = None,
+) -> Callable[[MissionState], dict]:
+    """Return a node that retrieves relevant notes from the SemanticStore.
+
+    If *semantic* is None (--no-memory mode) the node is a no-op.
+    """
+
+    def recall_memory_node(state: MissionState) -> dict:
+        if semantic is None:
+            return {"recalled": []}
+
+        from kormoran.memory.retrieval import mark_stale_if_contradicted, retrieve_for_context
+        from kormoran.types import TargetSpec
+
+        target = TargetSpec.model_validate(state["target"])
+        drone = DroneState.model_validate(state["drone"])
+        recalled = retrieve_for_context(
+            semantic,
+            scene_id=state["scene_id"],
+            target_label=target.label,
+            drone_x=drone.pose.x,
+            drone_y=drone.pose.y,
+            step=state["step"],
+        )
+        # Halve confidence on any location notes that are contradicted by
+        # the current observation (no detection near a previously noted location).
+        mark_stale_if_contradicted(
+            semantic,
+            recalled=recalled,
+            drone_x=drone.pose.x,
+            drone_y=drone.pose.y,
+            has_detection=bool(state.get("last_detections")),
+        )
+        return {"recalled": recalled}
 
     return recall_memory_node
 
@@ -257,6 +383,14 @@ def make_plan_node(planner: object, config: Settings) -> Callable[[MissionState]
                         confidence=1.0,
                     )
 
+        # Guardrail: prevent advancing into a known wall.
+        # Detect wall positions from clamped advances: if 2+ clamps cluster
+        # near the same x or y value, that's a wall.  If the planned advance
+        # would head toward it, force a parallel-to-wall advance instead.
+        if action.kind == "advance":
+            recent = list(state.get("recent_steps", []))
+            action = _wall_avoidance_guardrail(action, recent, drone_state)
+
         update: dict = {"last_action": action.model_dump()}
 
         # Accumulate LLM token usage if the planner tracks it.
@@ -328,7 +462,7 @@ def make_act_node(
         current_dets = [Detection.model_validate(d) for d in state["last_detections"]]
         detection = _best_detection(current_dets)
 
-        result = executor.execute(action, drone_state, detection)
+        result = executor.execute(action, drone_state, detection, target=target)
 
         new_safety_events = [e.model_dump() for e in executor.safety_events]
         executor.safety_events.clear()
@@ -554,12 +688,121 @@ def _build_history_summary(steps: list[StepRecord]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# reflect_and_store node (stub — M5 will persist to ChromaDB/SQLite)
+# reflect_and_store node
 # ---------------------------------------------------------------------------
 
 
-def reflect_node(state: MissionState) -> dict:  # noqa: ARG001
-    return {}
+def make_reflect_node(
+    episodic: EpisodicStore | None = None,
+    semantic: SemanticStore | None = None,
+    llm: object | None = None,
+) -> Callable[[MissionState], dict]:
+    """Return a node that persists mission results and generates memory notes.
+
+    If both stores are None (--no-memory mode) the node is a no-op.
+    LLM reflection is only performed when *llm* is provided.
+    """
+
+    def reflect_node(state: MissionState) -> dict:
+        import time
+        from datetime import UTC, datetime
+
+        from kormoran.memory.schemas import EpisodicRecord
+        from kormoran.types import TargetSpec
+
+        target = TargetSpec.model_validate(state["target"])
+        usage = state.get("usage") or {}
+
+        # ------------------------------------------------------------------
+        # Build the path from recent_steps (no frames — privacy rule).
+        # ------------------------------------------------------------------
+        path: list[dict] = [
+            {
+                "x": r["pose_x"],
+                "y": r["pose_y"],
+                "z": r["pose_z"],
+                "step": r["step"],
+            }
+            for r in state["recent_steps"]
+        ]
+
+        # Determine outcome
+        status = state.get("status", "error")
+        outcome_map = {"found": "found", "not_found": "not_found", "aborted": "error"}
+        outcome = outcome_map.get(status, "error")
+
+        found_pose: dict | None = None
+        found_from_pose: dict | None = None
+        if outcome == "found" and path:
+            last = path[-1]
+            found_pose = {"x": last["x"], "y": last["y"], "z": last["z"], "yaw_deg": 0.0}
+            if len(path) >= 2:
+                prev = path[-2]
+                found_from_pose = {"x": prev["x"], "y": prev["y"], "z": prev["z"], "yaw_deg": 0.0}
+
+        now_iso = datetime.now(UTC).isoformat()
+        duration_s = time.time() - float(state.get("started_at", time.time()))
+
+        record = EpisodicRecord(
+            mission_id=state["mission_id"],
+            ts=now_iso,
+            scene_id=state["scene_id"],
+            target_label=target.label,
+            outcome=outcome,
+            steps=state["step"],
+            duration_s=round(duration_s, 2),
+            path=path,
+            found_pose=found_pose,
+            found_from_pose=found_from_pose,
+            model=usage.get("model", ""),
+            tokens=usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0),
+            cost_usd=usage.get("est_cost_usd", 0.0),
+        )
+
+        if episodic is not None:
+            try:
+                episodic.store(record)
+                logger.info("reflect_node: episodic record stored (mission=%s)", record.mission_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("reflect_node: episodic store failed: %s", exc)
+
+        if semantic is not None and llm is not None:
+            from kormoran.memory.reflection import reflect
+            from kormoran.memory.retrieval import supersede_not_found_notes
+
+            notes = reflect(record, llm)
+            for note in notes:
+                try:
+                    semantic.store(note)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("reflect_node: semantic store failed for note: %s", exc)
+            if notes:
+                logger.info("reflect_node: %d memory notes stored", len(notes))
+
+            # After a successful find, demote prior "not_found" notes so
+            # they don't pollute future retrievals.
+            if outcome == "found":
+                n_demoted = supersede_not_found_notes(
+                    semantic,
+                    scene_id=record.scene_id,
+                    target_label=record.target_label,
+                    found_mission_id=record.mission_id,
+                )
+                if n_demoted:
+                    logger.info("reflect_node: demoted %d stale not-found notes", n_demoted)
+
+            # Prune to keep only the top notes per scene+target.
+            n_pruned = semantic.prune(
+                scene_id=record.scene_id,
+                target_label=record.target_label,
+                keep=5,
+            )
+            if n_pruned:
+                logger.info("reflect_node: pruned %d low-confidence notes", n_pruned)
+
+        return {}
+
+    return reflect_node
 
 
 # ---------------------------------------------------------------------------

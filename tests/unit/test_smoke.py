@@ -16,6 +16,8 @@ def test_import_kormoran() -> None:
 def test_settings_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     """Settings can be instantiated without a real API key."""
     monkeypatch.setenv("OPENROUTER_API_KEY", "")
+    # Force default model — .env file may override pydantic-settings default.
+    monkeypatch.setenv("LLM_MODEL", "openai/gpt-4o-mini")
     # Clear lru_cache so monkeypatched env is picked up
     from kormoran.config import get_settings
 

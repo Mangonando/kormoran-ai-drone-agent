@@ -35,9 +35,11 @@ GRID_CELL_SIZE_M: float = 0.5
 
 #: Minimum area_frac for a detection to trigger the approach reflex.
 #: Below this threshold the LLM is consulted instead — it can decide whether
-#: to approach, scan, or navigate around obstacles.  0.01 (1%) lets the
-#: reflex handle clear sightings while tiny/distant detections go to the LLM.
-REFLEX_AREA_FRAC: float = 0.01
+#: to approach, scan, or navigate around obstacles.  0.002 (0.2%) ensures
+#: the descent-then-approach reflex fires as soon as a target is detected,
+#: preventing the drone from approaching at cruising altitude and losing
+#: the target out the bottom of the camera FOV.
+REFLEX_AREA_FRAC: float = 0.002
 
 #: Drone altitude to descend to before approaching a detected target.
 #: Slightly above the standard target height (0.5 m) so the target is near

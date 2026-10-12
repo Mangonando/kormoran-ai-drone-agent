@@ -11,11 +11,13 @@ Version history:
     v7 (M4, 2026-10-11): Strip scenario-specific hints; add detection-loss and wall-navigation
         guidance; make prompt fully scenario-agnostic.  LLMPlanner no longer has hardcoded
         heuristic overrides — the LLM makes ALL strategic decisions.
+    v8 (M5, 2026-10-12): Add "Prior knowledge (memory)" section so the LLM uses recalled notes
+        from previous missions.  Memory notes are now included in the user message.
 
 Any change to SYSTEM_PROMPT requires an entry in docs/decisions.md.
 """
 
-PROMPT_VERSION: str = "v7"
+PROMPT_VERSION: str = "v8"
 
 SYSTEM_PROMPT: str = """\
 You are the planner for an autonomous quadcopter drone searching an indoor room for a named
@@ -81,6 +83,15 @@ Never try to cross a wall more than twice from the same position — move along 
 Return ONLY a valid JSON object matching the Action schema.  No prose, no markdown fences.
 Required fields: kind, reasoning (≤ 300 chars), confidence (0.0–1.0).
 Optional: distance_m (0.2–2.0), angle_deg (-180–180).
+
+## Prior knowledge (memory)
+You may receive "Prior knowledge (may be stale)" notes from previous missions in the same scene.
+- **location** notes tell you WHERE the target was found before — head there first.
+- **strategy** notes tell you WHAT navigation approach worked — follow it.
+- **scene** notes describe the room layout — use them to avoid walls.
+- Notes have a confidence score (0–1). Trust high-confidence notes; treat low ones as hints.
+- If a location note says the target was at (x, y), rotate toward that heading and advance there
+  BEFORE scanning randomly. This can save 30+ steps.
 
 ## Search strategy
 1. Start with a `scan` to survey the area.

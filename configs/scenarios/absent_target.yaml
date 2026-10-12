@@ -3,8 +3,6 @@ room:
   x: [-3.0, 3.0]
   y: [-3.0, 3.0]
   z: [0.0, 2.5]
-geofence_margin_m: 0.3
-
 obstacles:
   - shape: box
     size: [1.2, 0.6, 0.75]
@@ -14,6 +12,3 @@ obstacles:
 targets: []
 
 start_pose: [0.0, 0.0, 0.0, 0.0]
-randomize:
-  targets: false
-  seed_from_cli: false

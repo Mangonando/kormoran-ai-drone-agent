@@ -448,3 +448,90 @@ increase (37 for red cube vs 21 before).  Blue sphere went from not_found to fou
 Yellow cylinder and red cube remain not_found in 50 steps — navigating multi-gap walls is
 genuinely hard and may need more steps, a better model, or long-term memory (M5).
 Cost per mission increases slightly (~$0.01) but is well within the $0.50 budget cap.
+
+---
+
+## 2026-10-12 — M5: Long-term memory (SQLite + ChromaDB)
+
+**Context:** M5 adds persistent memory across missions so the agent remembers where targets
+were found and which strategies worked, enabling measurable speedup on repeated missions.
+
+**Decisions made:**
+
+**Embedding model:** ChromaDB default (sentence-transformers `all-MiniLM-L6-v2` via onnxruntime)
+for production. Tests use a deterministic SHA-256 hash-based embedding function with
+`embed_query()` and `embed_documents()` methods to satisfy ChromaDB 1.5.x interface without
+requiring a model download.  This keeps unit tests fast and offline-capable.
+
+**Store layout:**
+- `EpisodicStore` — `sqlite3` (no ORM), single `missions` table, one row per mission.
+  Schema: `mission_id, ts, scene_id, target_label, outcome, steps, duration_s, path (JSON),
+  found_pose (JSON|NULL), found_from_pose (JSON|NULL), model, tokens, cost_usd`.
+  The `path` column stores a list of `{x, y, z, step}` dicts — NO raw image bytes (enforced
+  by unit test asserting schema fields).
+- `SemanticStore` — ChromaDB `PersistentClient`, collection `"notes"`.  Metadata keys:
+  `scene_id, target_label, kind, confidence, created_at, mission_id`.  No image data stored
+  (test asserts metadata schema).  Retrieval ranking: similarity × recency × confidence.
+
+**Per-scenario geofence override:** `GeofenceOverride` Pydantic model added to `config.py`
+with `x_min, x_max, y_min, y_max` float fields.  `ScenarioConfig` gains optional
+`geofence: GeofenceOverride | None = None` field.  In `cli.py run-mission`, the override is
+applied via `settings.model_copy(update={...})` (no mutation of the `@lru_cache` instance).
+`penthouse_v1.yaml` now includes `geofence: {x_min: -7.2, x_max: 7.2, y_min: -8.2, y_max: 8.2}`.
+
+**Memory nodes:**
+- `make_recall_memory_node(semantic)` — if semantic store is provided, queries
+  `retrieve_for_context()` and calls `mark_stale_if_contradicted()` to halve confidence of
+  location notes that are contradicted by the current observation.
+- `make_reflect_node(episodic, semantic, llm)` — stores `EpisodicRecord` to SQLite; if LLM
+  is provided, calls `reflect()` to generate 1–3 `MemoryNote` objects and stores them to
+  ChromaDB.  Privacy rule: path stored as coordinate list only, never with image bytes.
+
+**`--no-memory` flag:** Added to `run-mission` CLI for ablation studies. Both stores are
+`None` → recall and reflect nodes are no-ops.
+
+**CLI `memory` subgroup:** `memory list`, `memory notes`, `memory clear --yes`.
+
+**Staleness:** `mark_stale_if_contradicted` halves confidence of a `location` note when the
+drone is within 1.5 m of the noted coordinates but sees no detection.  Coordinates are parsed
+from the note text via regex `\(x,y\)`.
+
+**Consequences:** M5 unit DoD passes (11/11 unit tests, 4/4 integration tests).  LLM test
+(mean steps mission 3 < mission 1) deferred to post-submission (requires 5 seeds × 3 missions
+= 15 LLM runs; marked as pending LLM test in ROADMAP).
+
+---
+
+## 2026-10-12 — M5: Memory retrieval fixes + prompt v8
+
+**Context:** Testing 5 consecutive runs on `apartment_v1` (yellow cylinder, seed 2) showed
+no improvement across runs despite memory notes being stored correctly.  Two root causes:
+
+1. **Memory notes never shown to LLM:** `_build_user_message` in `planners.py` built the
+   prompt with target, pose, history, coverage, etc. but never included `ctx.recalled`.
+   The LLM was completely unaware of prior mission knowledge.
+
+2. **Note pollution from failed missions:** Failed missions stored location/strategy notes
+   at confidence 0.9 (same as successful finds).  After several runs, "not found at X"
+   notes competed with accurate "found at Y" notes, confusing the LLM.
+
+**Decisions:**
+
+- **Prompt v8:** Add "Prior knowledge (memory)" section to `SYSTEM_PROMPT` explaining how
+  to use location, strategy, and scene notes.  `_build_user_message` now includes recalled
+  notes with kind and confidence.
+
+- **Failed mission confidence cap:** `reflect()` caps confidence at 0.4 for notes from
+  `not_found` missions (was 0.9).  Successful finds keep full confidence range.
+
+- **Supersede stale notes:** New `supersede_not_found_notes()` in `retrieval.py` — after a
+  successful find, halves confidence on all prior notes containing negative keywords
+  ("not found", "did not", "failed") for the same scene+target.  Called from `reflect_node`.
+
+- **Note pruning:** New `SemanticStore.prune(scene_id, target_label, keep=5)` — keeps only
+  the top 5 notes by confidence per scene+target, deleting the rest.  Called from
+  `reflect_node` after storing new notes.
+
+**Consequences:** The LLM now sees memory notes and can navigate directly to previously
+found locations.  Low-confidence failure notes are naturally pruned, preventing accumulation
+of misleading context.  Existing unit tests pass (97/97).

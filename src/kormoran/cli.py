@@ -204,6 +204,9 @@ def run_mission(
     ),
     gui: bool = typer.Option(False, "--gui", help="Show PyBullet GUI"),
     max_steps: int = typer.Option(50, "--max-steps", help="Max decision steps"),
+    no_memory: bool = typer.Option(
+        False, "--no-memory", help="Disable long-term memory (ablation)"
+    ),
 ) -> None:
     """Run a full LangGraph mission loop in the simulator."""
     import time
@@ -226,6 +229,20 @@ def run_mission(
         raise typer.Exit(code=1)
 
     scene = ScenarioConfig.from_yaml(scenario_path)
+
+    # Apply per-scenario geofence override if the YAML defines one.
+    if scene.geofence is not None:
+        gf = scene.geofence
+        settings = settings.model_copy(
+            update={
+                "geofence_x_min": gf.x_min,
+                "geofence_x_max": gf.x_max,
+                "geofence_y_min": gf.y_min,
+                "geofence_y_max": gf.y_max,
+            }
+        )
+        typer.echo(f"  Geofence override: x=[{gf.x_min},{gf.x_max}] y=[{gf.y_min},{gf.y_max}]")
+
     target_spec: TargetSpec | None = None
     for t in scene.targets:
         if t.label == target:
@@ -245,6 +262,7 @@ def run_mission(
             raise typer.Exit(code=1)
 
     # Build planner.
+    llm_instance = None
     if planner_name == "heuristic":
         planner = HeuristicPlanner()
     elif planner_name == "scripted":
@@ -267,10 +285,29 @@ def run_mission(
         if settings.openrouter_api_key is None:
             typer.echo("Error: OPENROUTER_API_KEY required for llm planner", err=True)
             raise typer.Exit(code=1)
-        planner = LLMPlanner(make_llm(settings))
+        llm_instance = make_llm(settings)
+        planner = LLMPlanner(llm_instance)
     else:
         typer.echo(f"Error: unknown planner {planner_name!r}", err=True)
         raise typer.Exit(code=1)
+
+    # Build memory stores (unless --no-memory).
+    episodic_store = None
+    semantic_store = None
+    reflection_llm = None
+    if not no_memory:
+        from kormoran.memory.episodic import EpisodicStore
+        from kormoran.memory.semantic import SemanticStore
+
+        data_dir = Path(settings.data_dir)
+        episodic_store = EpisodicStore(data_dir / "memory" / "episodic.db")
+        semantic_store = SemanticStore(data_dir / "memory" / "semantic")
+        if llm_instance is not None:
+            reflection_llm = llm_instance
+        typer.echo(
+            f"  Memory   : episodic={episodic_store.count()} missions, "
+            f"semantic={semantic_store.count()} notes"
+        )
 
     drone = SimDrone(scenario=scene, gui=gui, seed=seed)
     perceiver = ColorDetector()
@@ -278,7 +315,7 @@ def run_mission(
 
     typer.echo(
         f"run-mission: id={mission_id} target={target!r} scenario={scenario}"
-        f" planner={planner_name} seed={seed}"
+        f" planner={planner_name} seed={seed}" + (" [no-memory]" if no_memory else "")
     )
 
     drone.connect()
@@ -294,7 +331,14 @@ def run_mission(
             mission_logger = MissionLogger(log_path)
 
         graph = build_mission_graph(
-            drone, planner, perceiver, settings, mission_logger=mission_logger
+            drone,
+            planner,
+            perceiver,
+            settings,
+            mission_logger=mission_logger,
+            episodic=episodic_store,
+            semantic=semantic_store,
+            reflection_llm=reflection_llm,
         )
         initial = make_initial_state(
             mission_id, scene.scene_id, target_spec, drone_state, max_steps
@@ -334,6 +378,94 @@ def run_mission(
         except Exception:  # noqa: BLE001, S110
             pass
         drone.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# memory subgroup
+# ---------------------------------------------------------------------------
+
+memory_app = typer.Typer(name="memory", help="Inspect and manage long-term memory stores.")
+app.add_typer(memory_app)
+
+
+@memory_app.command(name="list")
+def memory_list(
+    scene_id: str = typer.Option("", "--scene", help="Filter by scene id"),
+    target_label: str = typer.Option("", "--target", help="Filter by target label"),
+    limit: int = typer.Option(20, "--limit", help="Max rows to show"),
+) -> None:
+    """List episodic mission records."""
+    from kormoran.config import get_settings
+    from kormoran.memory.episodic import EpisodicStore
+
+    settings = get_settings()
+    _configure_logging(settings.log_level)
+    store = EpisodicStore(Path(settings.data_dir) / "memory" / "episodic.db")
+    records = store.list_missions(
+        scene_id=scene_id or None,
+        target_label=target_label or None,
+        limit=limit,
+    )
+    if not records:
+        typer.echo("No missions recorded yet.")
+        return
+    for r in records:
+        typer.echo(
+            f"{r.ts[:19]}  id={r.mission_id}  scene={r.scene_id}"
+            f"  target={r.target_label!r}  outcome={r.outcome}"
+            f"  steps={r.steps}  cost=${r.cost_usd:.4f}"
+        )
+
+
+@memory_app.command(name="notes")
+def memory_notes(
+    scene_id: str = typer.Option("", "--scene", help="Filter by scene id"),
+    target_label: str = typer.Option("", "--target", help="Filter by target label"),
+    limit: int = typer.Option(20, "--limit", help="Max notes to show"),
+) -> None:
+    """List semantic memory notes."""
+    from kormoran.config import get_settings
+    from kormoran.memory.semantic import SemanticStore
+
+    settings = get_settings()
+    _configure_logging(settings.log_level)
+    store = SemanticStore(Path(settings.data_dir) / "memory" / "semantic")
+    notes = store.list_notes(
+        scene_id=scene_id or None,
+        target_label=target_label or None,
+        limit=limit,
+    )
+    if not notes:
+        typer.echo("No memory notes stored yet.")
+        return
+    for n in notes:
+        typer.echo(
+            f"[{n.get('kind')}] conf={n.get('confidence', 1.0):.2f}"
+            f"  mission={n.get('mission_id')}  {n.get('text', '')}"
+        )
+
+
+@memory_app.command(name="clear")
+def memory_clear(
+    confirm: bool = typer.Option(False, "--yes", help="Skip confirmation prompt"),
+) -> None:
+    """Delete ALL episodic and semantic memory records."""
+    from kormoran.config import get_settings
+    from kormoran.memory.episodic import EpisodicStore
+    from kormoran.memory.semantic import SemanticStore
+
+    settings = get_settings()
+    _configure_logging(settings.log_level)
+
+    if not confirm:
+        typer.confirm("This will delete all memory records. Continue?", abort=True)
+
+    data_dir = Path(settings.data_dir)
+    ep = EpisodicStore(data_dir / "memory" / "episodic.db")
+    sem = SemanticStore(data_dir / "memory" / "semantic")
+    ep.clear()
+    sem.clear()
+    typer.echo("Memory cleared: episodic + semantic stores wiped.")
 
 
 @app.command(name="run-sim-smoke")

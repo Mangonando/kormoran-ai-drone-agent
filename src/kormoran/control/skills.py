@@ -175,47 +175,62 @@ def approach(
     detection: Detection,
     step_m: float = 0.3,
     timeout_s: float = _DEFAULT_MOVE_TIMEOUT_S,
+    perceiver: object | None = None,
+    target: object | None = None,
 ) -> MoveResult:
-    """Advance toward a detected target, correcting lateral offset.
+    """Closed-loop visual servo: rotate to centre, descend if needed, advance.
 
-    Computes a small forward step combined with a lateral correction derived
-    from the detection's horizontal centre offset, so that successive approach
-    calls converge the target toward the frame centre.
+    When *perceiver* and *target* are provided the skill re-acquires the target
+    after each micro-step, giving reliable convergence even when the initial
+    detection is far off-centre or near the bottom of the frame.
 
-    Progress tracking: uses a short per-step timeout and checks how far the
-    drone actually moved.  If z dropped by more than 0.2 m (crash into an
-    obstacle ejected the drone) or forward displacement is less than 30 % of
-    the commanded step (wall blocked the path), the result is returned as
-    ``clamped`` with reason ``"path blocked"`` so the caller can suppress
-    further approach attempts without waiting for the full timeout.
+    Falls back to the original open-loop behaviour when perceiver is ``None``.
 
     Parameters
     ----------
     detection:
-        A ``Detection`` returned by the Perceiver; ``center_norm[0]`` is the
-        horizontal offset in [-1, 1] (positive = right of centre).
+        Initial ``Detection`` from the Perceiver.
     step_m:
-        Forward advance distance (bounded to ``[0.1, 0.5]`` m regardless of
-        what the caller passes).
+        Forward advance distance (bounded to ``[0.1, 0.5]`` m).
+    perceiver:
+        A ``Perceiver``-conformant object used to re-detect after corrections.
+    target:
+        A ``TargetSpec`` passed to ``perceiver.detect()``.
     """
     step_m = max(0.1, min(step_m, 0.5))
-    cx = detection.center_norm[0]  # horizontal offset: positive = right
 
-    # If the target is far off-centre, rotate to face it before advancing.
-    # The camera FOV is ~60°, so cx=1.0 corresponds to ~30° off-axis.
-    # Rotating first is far more effective than tiny lateral nudges.
-    if abs(cx) > 0.3:
-        yaw_correction = -cx * 30.0  # degrees; positive cx → rotate clockwise (negative)
-        logger.debug("skill approach: rotating %.1f° to centre (cx=%.2f)", yaw_correction, cx)
+    # --- Phase 1: rotate until target is horizontally centred ---------------
+    cx = detection.center_norm[0]
+    for _ in range(4):  # max 4 correction attempts
+        if abs(cx) <= 0.15:
+            break
+        yaw_correction = -cx * 30.0
+        logger.debug("skill approach: yaw correction %.1f° (cx=%.2f)", yaw_correction, cx)
         drone.rotate(yaw_correction, timeout_s=3.0)
 
-    # After rotation, use a moderate lateral correction for fine-tuning.
-    # Re-read cx would require a new frame; instead use a smaller residual correction.
-    dy = -cx * step_m * 0.3
-    logger.debug("skill approach step_m=%.2f cx=%.2f dy=%.2f", step_m, cx, dy)
+        # Re-acquire after rotation.
+        det = _reacquire(drone, perceiver, target)
+        if det is None:
+            break
+        detection = det
+        cx = detection.center_norm[0]
+
+    # --- Phase 2: descend if target is in lower part of frame ---------------
+    cy = detection.center_norm[1]
+    if cy > 0.5:
+        descend_m = min((cy - 0.3) * 0.6, 0.4)
+        logger.debug("skill approach: descending %.2fm (cy=%.2f)", descend_m, cy)
+        drone.move_relative(0.0, 0.0, -descend_m, timeout_s=3.0)
+
+        det = _reacquire(drone, perceiver, target)
+        if det is not None:
+            detection = det
+
+    # --- Phase 3: advance forward -------------------------------------------
+    dy = -detection.center_norm[0] * step_m * 0.3
+    logger.debug("skill approach step_m=%.2f cx=%.2f dy=%.2f", step_m, detection.center_norm[0], dy)
 
     before = drone.get_state().pose
-    # Use a short timeout so wall collisions fail fast instead of burning 10 s.
     step_timeout = min(timeout_s, 3.0)
     result = drone.move_relative(step_m, dy, 0.0, step_timeout)
 
@@ -224,7 +239,6 @@ def approach(
     yaw_rad = math.radians(before.yaw_deg)
     actual_dx = result.pose.x - before.x
     actual_dy = result.pose.y - before.y
-    # Project actual XY displacement onto the commanded forward direction.
     forward_progress = actual_dx * math.cos(yaw_rad) + actual_dy * math.sin(yaw_rad)
 
     if dz < -0.2 or forward_progress < step_m * 0.3:
@@ -256,3 +270,18 @@ def approach(
         )
 
     return result
+
+
+def _reacquire(
+    drone: DroneInterface,
+    perceiver: object | None,
+    target: object | None,
+) -> Detection | None:
+    """Take a fresh frame, run the detector, return the best detection or None."""
+    if perceiver is None or target is None:
+        return None
+    frame = drone.get_frame()
+    dets: list[Detection] = perceiver.detect(frame, target)  # type: ignore[union-attr]
+    if not dets:
+        return None
+    return max(dets, key=lambda d: d.confidence * d.area_frac)
