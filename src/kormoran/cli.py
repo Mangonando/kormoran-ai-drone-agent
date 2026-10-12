@@ -232,8 +232,17 @@ def run_mission(
             target_spec = TargetSpec(label=t.label, color=t.color, shape=t.shape)
             break
     if target_spec is None:
-        typer.echo(f"Error: label {target!r} not in scenario {scenario!r}", err=True)
-        raise typer.Exit(code=1)
+        if not scene.targets:
+            # Absent-target scenario: the target genuinely doesn't exist in the
+            # scene.  Build a spec from the label so the agent can search and
+            # (correctly) report not_found.
+            parts = target.rsplit(" ", 1)
+            color = parts[0] if len(parts) == 2 else "red"
+            shape = parts[1] if len(parts) == 2 else "cube"
+            target_spec = TargetSpec(label=target, color=color, shape=shape)
+        else:
+            typer.echo(f"Error: label {target!r} not in scenario {scenario!r}", err=True)
+            raise typer.Exit(code=1)
 
     # Build planner.
     if planner_name == "heuristic":

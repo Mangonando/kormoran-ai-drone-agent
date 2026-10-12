@@ -301,8 +301,8 @@ Build:
 
 Definition of Done:
 - [x] Unit: graph with `ScriptedPlanner` + `MockDrone` reaches `found` on a scripted scene; invalid LLM output (bad enum, out-of-range distance) is re-prompted once then falls back to `scan`; budget exhaustion yields `not_found`; a crash mid-mission can be resumed from the checkpoint and finishes.
-- [ ] Integration (`sim`): `HeuristicPlanner` finds the red cube in ≥ 8/10 seeds of `living_room_v1` (this is the baseline the LLM must beat or match).
-- [ ] LLM (`llm`, local only): `LLMPlanner` finds the target in ≥ 7/10 seeds; on `absent_target` it reports `not_found` in ≥ 8/10 runs without a false "found". Log model, tokens, cost per mission.
+- [x] Integration (`sim`): `HeuristicPlanner` finds the red cube in ≥ 8/10 seeds of `living_room_v1` (this is the baseline the LLM must beat or match). ✅ 10/10 (2026-10-12)
+- [x] LLM (`llm`, local only): `LLMPlanner` finds the target in ≥ 7/10 seeds; on `absent_target` it reports `not_found` in ≥ 8/10 runs without a false "found". Log model, tokens, cost per mission. ✅ living_room 10/10 found, absent_target 10/10 not_found (2026-10-12)
 - [x] Prompt lives in a versioned file (`agent/prompts.py`, `PROMPT_VERSION = "v1"`); a change to it requires updating `docs/decisions.md`.
 
 ### M5 — Long-term memory (≈8 h)
