@@ -9,6 +9,8 @@ Three planners are provided:
 from __future__ import annotations
 
 import logging
+import re
+from collections import Counter
 
 from pydantic import BaseModel
 
@@ -338,8 +340,6 @@ class LLMPlanner:
         Returns a short hint like "Wall at x≈0 blocked at y=-1.0,-0.5,0.0,0.5.
         Try crossing at y≈1.0 (no blockage recorded there)."
         """
-        import re
-
         # Collect all blocked positions: current mission + wall notes.
         blocked: list[tuple[float, float]] = []
 
@@ -365,8 +365,6 @@ class LLMPlanner:
 
         # Cluster blocked x-positions to find vertical walls.
         xs_rounded = [round(x * 2) / 2 for x, _ in blocked]
-        from collections import Counter
-
         x_counts = Counter(xs_rounded)
 
         hints: list[str] = []

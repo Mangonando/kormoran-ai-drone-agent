@@ -181,12 +181,11 @@ class SkillExecutor:
                 action_kind=kind,
             )
         if kind == "scan":
-            scan_result = self._run_with_watchdog(
+            return self._run_with_watchdog(
                 lambda: skills.scan(self._drone),
                 timeout_s=timeout * 8,  # scan does 8 rotations
                 action_kind=kind,
             )
-            return scan_result  # type: ignore[return-value]
         if kind == "advance":
             return self._run_with_watchdog(
                 lambda: skills.advance(self._drone, dist, timeout),

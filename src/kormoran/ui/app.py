@@ -136,9 +136,9 @@ with tab_mission:
         st.session_state["mission_id"] = mid
         st.session_state["log_lines"] = []
         proc = launch_mission(
-            target=str(target),
-            scenario=str(scenario),
-            planner=str(planner),
+            target=target,
+            scenario=scenario,
+            planner=planner,
             seed=int(seed),  # type: ignore[arg-type]
             max_steps=int(max_steps),  # type: ignore[arg-type]
             memory=memory,
@@ -427,11 +427,11 @@ with tab_memory:
     st.divider()
     if st.button("Clear all memory", type="secondary"):
         try:
-            from kormoran.memory.episodic import EpisodicStore
-            from kormoran.memory.semantic import SemanticStore
+            from kormoran.memory.episodic import EpisodicStore as _EpStore
+            from kormoran.memory.semantic import SemanticStore as _SemStore
 
-            EpisodicStore(_data_dir() / "memory" / "episodic.db").clear()
-            SemanticStore(_data_dir() / "memory" / "semantic").clear()
+            _EpStore(_data_dir() / "memory" / "episodic.db").clear()
+            _SemStore(_data_dir() / "memory" / "semantic").clear()
             st.success("Memory cleared.")
             st.rerun()
         except Exception as exc:  # noqa: BLE001

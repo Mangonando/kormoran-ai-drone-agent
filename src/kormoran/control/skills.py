@@ -23,6 +23,54 @@ logger = logging.getLogger(__name__)
 _DEFAULT_MOVE_TIMEOUT_S: float = 10.0
 _DEFAULT_SCAN_STEP_TIMEOUT_S: float = 5.0
 
+# Collision detection thresholds
+_COLLISION_DZ_THRESHOLD: float = -0.2
+_COLLISION_FWD_RATIO: float = 0.3
+_RECOVERY_ALTITUDE_BUFFER: float = 0.1
+_RECOVERY_TIMEOUT_S: float = 5.0
+
+
+def _check_collision(
+    drone: DroneInterface,
+    result: MoveResult,
+    before_z: float,
+    distance_m: float,
+    forward_progress: float,
+    skill_name: str,
+) -> MoveResult | None:
+    """Return a clamped MoveResult if the move was blocked, else None."""
+    dz = result.pose.z - before_z
+    if dz >= _COLLISION_DZ_THRESHOLD and forward_progress >= distance_m * _COLLISION_FWD_RATIO:
+        return None
+    logger.info(
+        "skill %s: path blocked (dz=%.2f fwd=%.2f vs %.2f)",
+        skill_name,
+        dz,
+        forward_progress,
+        distance_m,
+    )
+    if dz < _COLLISION_DZ_THRESHOLD:
+        recover_alt = before_z - result.pose.z + _RECOVERY_ALTITUDE_BUFFER
+        logger.info(
+            "skill %s: stabilizing +%.1fm after wall hit (z=%.2f)",
+            skill_name,
+            recover_alt,
+            result.pose.z,
+        )
+        recover_result = drone.move_relative(0.0, 0.0, recover_alt, _RECOVERY_TIMEOUT_S)
+        return MoveResult(
+            status="clamped",
+            pose=recover_result.pose,
+            elapsed_s=result.elapsed_s + recover_result.elapsed_s,
+            reason="path blocked",
+        )
+    return MoveResult(
+        status="clamped",
+        pose=result.pose,
+        elapsed_s=result.elapsed_s,
+        reason="path blocked",
+    )
+
 
 def takeoff(drone: DroneInterface, altitude_m: float = 1.0) -> MoveResult:
     """Arm and climb to *altitude_m* above the takeoff point."""
@@ -91,43 +139,13 @@ def advance(
     step_timeout = min(timeout_s, 3.0)
     result = drone.move_relative(distance_m, 0.0, 0.0, step_timeout)
 
-    dz = result.pose.z - before.z
     yaw_rad = math.radians(before.yaw_deg)
     actual_dx = result.pose.x - before.x
     actual_dy = result.pose.y - before.y
     forward_progress = actual_dx * math.cos(yaw_rad) + actual_dy * math.sin(yaw_rad)
 
-    if dz < -0.2 or forward_progress < distance_m * 0.3:
-        logger.info(
-            "skill advance: path blocked (dz=%.2f fwd=%.2f vs %.2f)",
-            dz,
-            forward_progress,
-            distance_m,
-        )
-        # Stabilize: if the drone dropped, hover back up to pre-advance
-        # altitude to prevent a ground crash on the next step.
-        if dz < -0.2:
-            recover_alt = before.z - result.pose.z + 0.1
-            logger.info(
-                "skill advance: stabilizing +%.1fm after wall hit (z=%.2f)",
-                recover_alt,
-                result.pose.z,
-            )
-            recover_result = drone.move_relative(0.0, 0.0, recover_alt, 5.0)
-            return MoveResult(
-                status="clamped",
-                pose=recover_result.pose,
-                elapsed_s=result.elapsed_s + recover_result.elapsed_s,
-                reason="path blocked",
-            )
-        return MoveResult(
-            status="clamped",
-            pose=result.pose,
-            elapsed_s=result.elapsed_s,
-            reason="path blocked",
-        )
-
-    return result
+    blocked = _check_collision(drone, result, before.z, distance_m, forward_progress, "advance")
+    return blocked if blocked is not None else result
 
 
 def strafe(
@@ -235,41 +253,13 @@ def approach(
     result = drone.move_relative(step_m, dy, 0.0, step_timeout)
 
     # --- Progress check ---
-    dz = result.pose.z - before.z
     yaw_rad = math.radians(before.yaw_deg)
     actual_dx = result.pose.x - before.x
     actual_dy = result.pose.y - before.y
     forward_progress = actual_dx * math.cos(yaw_rad) + actual_dy * math.sin(yaw_rad)
 
-    if dz < -0.2 or forward_progress < step_m * 0.3:
-        logger.info(
-            "skill approach: path blocked (dz=%.2f fwd=%.2f vs %.2f)",
-            dz,
-            forward_progress,
-            step_m,
-        )
-        if dz < -0.2:
-            recover_alt = before.z - result.pose.z + 0.1
-            logger.info(
-                "skill approach: stabilizing +%.1fm after wall hit (z=%.2f)",
-                recover_alt,
-                result.pose.z,
-            )
-            recover_result = drone.move_relative(0.0, 0.0, recover_alt, 5.0)
-            return MoveResult(
-                status="clamped",
-                pose=recover_result.pose,
-                elapsed_s=result.elapsed_s + recover_result.elapsed_s,
-                reason="path blocked",
-            )
-        return MoveResult(
-            status="clamped",
-            pose=result.pose,
-            elapsed_s=result.elapsed_s,
-            reason="path blocked",
-        )
-
-    return result
+    blocked = _check_collision(drone, result, before.z, step_m, forward_progress, "approach")
+    return blocked if blocked is not None else result
 
 
 def _reacquire(

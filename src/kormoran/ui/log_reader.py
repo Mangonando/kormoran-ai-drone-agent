@@ -21,7 +21,6 @@ Each log line has the shape::
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 
@@ -34,20 +33,9 @@ def read_log(log_path: str | Path) -> list[dict]:
     Silently skips malformed lines so a partial write at mission end does
     not break the UI.  Returns an empty list if the file does not exist yet.
     """
-    path = Path(log_path)
-    if not path.exists():
-        return []
-    steps: list[dict] = []
-    with path.open() as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                steps.append(json.loads(line))
-            except json.JSONDecodeError as exc:
-                logger.debug("log_reader: skipping malformed line: %s", exc)
-    return steps
+    from kormoran.jsonl import read_jsonl
+
+    return read_jsonl(log_path)
 
 
 def latest_status_from_log(steps: list[dict]) -> str:

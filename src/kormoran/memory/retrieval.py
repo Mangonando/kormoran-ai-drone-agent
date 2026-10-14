@@ -11,6 +11,7 @@ but no detection visible).
 from __future__ import annotations
 
 import logging
+import re
 
 from kormoran.memory.semantic import SemanticStore
 
@@ -87,8 +88,6 @@ def mark_stale_if_contradicted(
 
 def _extract_coords(text: str) -> tuple[float, float] | None:
     """Best-effort extraction of (x, y) from a note like '... at (1.2,-0.5) ...'."""
-    import re
-
     m = re.search(r"\((-?\d+\.?\d*),\s*(-?\d+\.?\d*)\)", text)
     if m:
         try:

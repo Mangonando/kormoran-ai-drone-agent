@@ -572,3 +572,36 @@ visualization, memory browser, and an emergency stop that works across process b
 **Consequences:** The UI is fully decoupled from the agent process; a crash in either
 does not affect the other.  AppTest smoke tests (81/81) confirm the app renders all four
 tabs, parses fixture JSONL logs correctly, and the sentinel file round-trip works.
+
+---
+
+## 2026-10-14 — M6: Evaluation harness architecture
+
+**Context:** M6 requires a reproducible evaluation harness that runs a scenario matrix
+headless, computes aggregate metrics, and generates a Markdown report with plots.
+
+**Decisions made:**
+
+- **Subprocess isolation for eval runs:** Each eval case spawns `kormoran run-mission`
+  as a subprocess (same as the dashboard).  This ensures each mission gets a clean
+  PyBullet environment and cannot leak state between runs.  Results are parsed from
+  the JSONL mission logs written by `MissionLogger`.
+
+- **Resumable results file:** `runner.run_matrix` appends one JSON line per completed
+  case to `data/eval/results.jsonl`.  On restart, already-completed case IDs are
+  skipped.  This means a multi-hour LLM eval run can be interrupted and resumed.
+
+- **Scenario matrix updated:** `corridor_v1` was deleted in M5 (no unique value).
+  The matrix now uses: `living_room_v1`, `absent_target`, `apartment_v1`, `penthouse_v1`.
+
+- **Metrics design:** `absent_target` success = `not_found` (the correct answer);
+  `false_found_rate` tracks hallucinated "found" claims.  Safety violations are
+  counted per-run and summed in the group — the DoD requires zero.
+
+- **Plot generation:** Three PNG plots via matplotlib (Agg backend):
+  memory on vs off comparison, LLM vs heuristic comparison, and success-rate
+  overview.  All saved to `docs/plots/` and referenced from the Markdown report.
+
+**Consequences:** `make eval SEEDS=5` runs the full matrix and produces
+`docs/eval_results.md` with embedded plot references.  102/102 unit tests pass
+(21 new eval tests covering scenarios, metrics, report, and runner helpers).

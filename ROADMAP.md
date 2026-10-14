@@ -322,15 +322,15 @@ Definition of Done:
 **Goal:** reproducible numbers for the capstone's *Evaluation* criterion and the headline memory claim.
 
 Build:
-- `eval/scenarios.py`: scenario matrix = scenes {living_room_v1, corridor_v1, absent_target} × targets × seeds × planner {llm, heuristic} × memory {on, off}.
+- `eval/scenarios.py`: scenario matrix = scenes {living_room_v1, absent_target, apartment_v1, penthouse_v1} × targets × seeds × planner {llm, heuristic} × memory {on, off}.
 - `eval/runner.py`: runs the matrix headless, resumable, writes `results/*.jsonl`.
 - `eval/metrics.py`: success rate, false-found rate, mean/median steps, time-to-target, path length, LLM calls, tokens, est. cost, safety violations (must be 0), reflex-approach share.
 - `eval/report.py`: Markdown + PNG plots (steps-to-find vs mission number, LLM vs heuristic, memory on vs off) → `docs/eval_results.md`.
 
 Definition of Done:
-- [ ] CI runs a 2-scenario slice with `ScriptedPlanner` and validates the results schema.
-- [ ] Full matrix run locally with the LLM; `docs/eval_results.md` regenerated and committed; zero safety violations.
-- [ ] One-command reproduction documented: `make eval SEEDS=5`.
+- [x] CI runs a 2-scenario slice with `ScriptedPlanner` and validates the results schema.
+- [x] Full matrix run locally with the LLM; `docs/eval_results.md` regenerated and committed; zero safety violations.
+- [x] One-command reproduction documented: `make eval SEEDS=5`.
 
 ### M7 — Streamlit dashboard (≈6 h)
 **Goal:** the demo. Someone types a mission, watches the drone think and fly, and browses what it remembers.

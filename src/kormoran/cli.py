@@ -431,6 +431,75 @@ def run_mission(
         drone.disconnect()
 
 
+@app.command(name="eval")
+def eval_harness(
+    seeds: int = typer.Option(5, "--seeds", help="Number of seeds per scenario"),
+    scenarios: str = typer.Option(
+        "",
+        "--scenarios",
+        help="Comma-separated scenario IDs (default: all)",
+    ),
+    planners: str = typer.Option(
+        "heuristic,llm",
+        "--planners",
+        help="Comma-separated planner names",
+    ),
+    max_steps: int = typer.Option(50, "--max-steps", help="Max steps per mission"),
+    timeout_s: float = typer.Option(300.0, "--timeout", help="Per-mission timeout (s)"),
+    report_only: bool = typer.Option(
+        False, "--report-only", help="Skip running — regenerate report from existing results"
+    ),
+) -> None:
+    """Run the full evaluation matrix and generate docs/eval_results.md."""
+    from kormoran.config import get_settings
+    from kormoran.eval.metrics import load_results
+    from kormoran.eval.report import generate_report
+    from kormoran.eval.runner import run_matrix
+    from kormoran.eval.scenarios import build_matrix
+
+    settings = get_settings()
+    _configure_logging(settings.log_level)
+
+    data_dir = settings.data_dir
+    results_path = Path(data_dir) / "eval" / "results.jsonl"
+
+    if not report_only:
+        scenario_list = [s.strip() for s in scenarios.split(",") if s.strip()] or None
+        planner_list = [p.strip() for p in planners.split(",") if p.strip()]
+        cases = build_matrix(
+            scenarios_dir=settings.scenarios_dir,
+            scenarios=scenario_list,
+            seeds=seeds,
+            planners=planner_list,
+        )
+        typer.echo(f"Evaluation matrix: {len(cases)} cases")
+        results = run_matrix(
+            cases,
+            results_path,
+            data_dir=data_dir,
+            max_steps=max_steps,
+            timeout_s=timeout_s,
+        )
+        typer.echo(f"Completed {len(results)} new runs (results → {results_path})")
+
+    all_results = load_results(results_path)
+    if not all_results:
+        typer.echo("No results found — nothing to report.", err=True)
+        raise typer.Exit(code=1)
+
+    report_path = generate_report(
+        results_path,
+        output_path="docs/eval_results.md",
+        plots_dir="docs/plots",
+    )
+    typer.echo(f"Report → {report_path}")
+
+    # Safety check
+    total_safety = sum(r.get("safety_violations", 0) for r in all_results)
+    if total_safety > 0:
+        typer.echo(f"WARNING: {total_safety} safety violations detected!", err=True)
+
+
 @app.command(name="dashboard")
 def dashboard(
     port: int = typer.Option(8501, "--port", help="Streamlit server port"),

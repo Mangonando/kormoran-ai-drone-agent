@@ -8,17 +8,26 @@ the only place that knows about backends.
 from __future__ import annotations
 
 import logging
+import time
+import uuid as _uuid
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from kormoran.agent.state import (
+    ESCAPE_MARGIN_M,
+    ESCAPE_QUADRANT_ANGLES,
+    ESCAPE_YAW_TOLERANCE_DEG,
     FOUND_AREA_FRAC,
     FOUND_CENTER_TOL,
     GRID_CELL_SIZE_M,
+    MAX_CONSECUTIVE_ROTATES,
+    MAX_CONSECUTIVE_SCANS,
+    MAX_EXPLORE_Z_M,
     MIN_FLIGHT_Z_M,
     REFLEX_ALTITUDE_M,
     REFLEX_AREA_FRAC,
     REFLEX_LAND_FRAC,
+    STUCK_WINDOW,
     GridCell,
     MissionState,
     StepRecord,
@@ -364,14 +373,13 @@ def make_plan_node(planner: object, config: Settings) -> Callable[[MissionState]
         # At z > 1.1 the downward camera angle makes floor-level targets
         # nearly invisible.
         # ------------------------------------------------------------------
-        max_explore_z = 1.1
-        if drone_state.pose.z > max_explore_z and not detections:
+        if drone_state.pose.z > MAX_EXPLORE_Z_M and not detections:
             excess = round(drone_state.pose.z - (REFLEX_ALTITUDE_M + 0.3), 2)
             if excess >= 0.2:
                 logger.info(
                     "plan_node: z=%.2f > %.1f with no detection → descending %.2fm",
                     drone_state.pose.z,
-                    max_explore_z,
+                    MAX_EXPLORE_Z_M,
                     excess,
                 )
                 return {
@@ -403,7 +411,7 @@ def make_plan_node(planner: object, config: Settings) -> Callable[[MissionState]
                     consecutive_scans += 1
                 else:
                     break
-            if consecutive_scans >= 3:
+            if consecutive_scans >= MAX_CONSECUTIVE_SCANS:
                 logger.info(
                     "plan_node guardrail: %d consecutive scans → forcing advance 0.8m",
                     consecutive_scans,
@@ -431,7 +439,7 @@ def make_plan_node(planner: object, config: Settings) -> Callable[[MissionState]
 
             # Filter out quadrants near geofence boundaries.
             px, py = drone_state.pose.x, drone_state.pose.y
-            margin = 0.5
+            margin = ESCAPE_MARGIN_M
             candidates = [("NE", ne), ("SE", se), ("NW", nw), ("SW", sw)]
             feasible = []
             for name, count in candidates:
@@ -454,7 +462,7 @@ def make_plan_node(planner: object, config: Settings) -> Callable[[MissionState]
             # (drone is still stuck after trying them).
             recent_escapes = [
                 r["reasoning"].split("toward ")[-1].split(" quadrant")[0]
-                for r in recent[-12:]
+                for r in recent[-STUCK_WINDOW:]
                 if "stuck escape" in r.get("reasoning", "")
             ]
             # Sort by least-visited, then skip recently-tried directions.
@@ -465,17 +473,16 @@ def make_plan_node(planner: object, config: Settings) -> Callable[[MissionState]
                     chosen = (name, count)
                     break
 
-            target_angles = {"NE": 45.0, "SE": -45.0, "NW": 135.0, "SW": -135.0}
             least = chosen
-            escape_yaw = target_angles[least[0]]
+            escape_yaw = ESCAPE_QUADRANT_ANGLES[least[0]]
             delta = escape_yaw - drone_state.pose.yaw_deg
             while delta > 180:
                 delta -= 360
             while delta <= -180:
                 delta += 360
 
-            # If already facing the right way (within 20°), advance.
-            if abs(delta) < 20:
+            # If already facing the right way, advance.
+            if abs(delta) < ESCAPE_YAW_TOLERANCE_DEG:
                 logger.info("plan_node: STUCK → advancing 1.0m toward %s", least[0])
                 action = Action(
                     kind="advance",
@@ -507,7 +514,7 @@ def make_plan_node(planner: object, config: Settings) -> Callable[[MissionState]
                     consecutive_rotates += 1
                 else:
                     break
-            if consecutive_rotates >= 2:
+            if consecutive_rotates >= MAX_CONSECUTIVE_ROTATES:
                 logger.info(
                     "plan_node guardrail: %d consecutive rotates → forcing advance 0.8m",
                     consecutive_rotates + 1,
@@ -652,23 +659,25 @@ def make_act_node(
             )
 
         result_dict = result.model_dump() if isinstance(result, MoveResult) else {}
+        pose_dict = result_dict.get("pose", {})
+        px = pose_dict.get("x", 0.0)
+        py = pose_dict.get("y", 0.0)
+        pz = pose_dict.get("z", 0.0)
 
         # Build step record.
-        action_obj = action
         step_record = StepRecord(
             step=state["step"],
-            action_kind=action_obj.kind,
-            reasoning=action_obj.reasoning,
+            action_kind=action.kind,
+            reasoning=action.reasoning,
             result_status=result_dict.get("status", "?"),
             detections_count=len(last_detections),
-            pose_x=result_dict.get("pose", {}).get("x", 0.0),
-            pose_y=result_dict.get("pose", {}).get("y", 0.0),
-            pose_z=result_dict.get("pose", {}).get("z", 0.0),
+            pose_x=px,
+            pose_y=py,
+            pose_z=pz,
         )
 
         # Track visited cells.
-        pose_dict = result_dict.get("pose", {})
-        cell = _cell_from_pose(pose_dict.get("x", 0.0), pose_dict.get("y", 0.0))
+        cell = _cell_from_pose(px, py)
 
         if mission_logger is not None:
             mission_logger.log_step(
@@ -676,7 +685,7 @@ def make_act_node(
                 action=state["last_action"] or {},
                 result=result_dict,
                 detections=last_detections,
-                pose=result_dict.get("pose", {}),
+                pose=pose_dict,
                 usage=dict(state.get("usage") or {}),
                 events=new_safety_events,
             )
@@ -861,7 +870,6 @@ def make_reflect_node(
     """
 
     def reflect_node(state: MissionState) -> dict:
-        import time
         from datetime import UTC, datetime
 
         from kormoran.memory.schemas import EpisodicRecord
@@ -939,8 +947,6 @@ def make_reflect_node(
             # where the gap is.  No LLM call needed.
             gaps = _detect_gaps(list(state["recent_steps"]))
             if gaps and semantic is not None:
-                import uuid as _uuid
-
                 from kormoran.memory.schemas import MemoryNote
 
                 now_gap = datetime.now(UTC).isoformat()

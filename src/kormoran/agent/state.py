@@ -57,6 +57,37 @@ REFLEX_LAND_FRAC: float = 0.03
 #: sequences never trigger it, but a physics-induced ground-crash does.
 MIN_FLIGHT_Z_M: float = 0.3
 
+# ---------------------------------------------------------------------------
+# Plan-node guardrail constants
+# ---------------------------------------------------------------------------
+
+#: Maximum exploration altitude — above this the downward camera can't see
+#: floor-level targets.
+MAX_EXPLORE_Z_M: float = 1.1
+
+#: Number of consecutive scans from the same position before forcing an advance.
+MAX_CONSECUTIVE_SCANS: int = 3
+
+#: Number of consecutive rotates before forcing an advance (prevents spin loops).
+MAX_CONSECUTIVE_ROTATES: int = 2
+
+#: Stuck detector window size (steps).
+STUCK_WINDOW: int = 12
+
+#: Geofence margin (m) for filtering escape quadrants.
+ESCAPE_MARGIN_M: float = 0.5
+
+#: Yaw tolerance (degrees) for "already facing the escape direction".
+ESCAPE_YAW_TOLERANCE_DEG: float = 20.0
+
+#: Target yaw angles (degrees) for each escape quadrant.
+ESCAPE_QUADRANT_ANGLES: dict[str, float] = {
+    "NE": 45.0,
+    "SE": -45.0,
+    "NW": 135.0,
+    "SW": -135.0,
+}
+
 
 # ---------------------------------------------------------------------------
 # Typed sub-records
@@ -104,7 +135,7 @@ class MissionState(TypedDict):
     recent_steps: Annotated[list[StepRecord], operator.add]
     history_summary: str
     visited: Annotated[list[GridCell], operator.add]
-    recalled: list[dict]  # stub for M5
+    recalled: list[dict]  # memory notes retrieved from SemanticStore
     status: str  # "planning"|"flying"|"found"|"not_found"|"aborted"
     safety_events: Annotated[list[dict], operator.add]
     usage: TokenUsage

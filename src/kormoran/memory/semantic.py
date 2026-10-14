@@ -98,13 +98,14 @@ class SemanticStore:
             include=["documents", "metadatas", "distances"],
         )
 
+        ids = results["ids"][0]
         docs = results["documents"][0]
         metas = results["metadatas"][0]
         distances = results["distances"][0]
 
         now = datetime.now(UTC)
         ranked: list[tuple[float, dict]] = []
-        for doc, meta, dist in zip(docs, metas, distances, strict=True):
+        for note_id, doc, meta, dist in zip(ids, docs, metas, distances, strict=True):
             # ChromaDB l2 distance → cosine-like similarity in [0,1]
             similarity = 1.0 / (1.0 + dist)
             confidence = float(meta.get("confidence", 1.0))
@@ -136,7 +137,7 @@ class SemanticStore:
                         "kind": meta.get("kind"),
                         "confidence": confidence,
                         "score": round(score, 4),
-                        "note_id": meta.get("note_id", ""),
+                        "note_id": note_id,
                         "mission_id": meta.get("mission_id", ""),
                         "created_at": created_at_str,
                     },
