@@ -330,6 +330,69 @@ class LLMPlanner:
         return f"{total} cells ({quad_str}){hint}"
 
     @staticmethod
+    def _infer_gaps(ctx: PlanContext) -> str:
+        """Infer wall gaps from clamped positions (this mission + memory).
+
+        Finds walls where advances were blocked at multiple y (or x) values,
+        then identifies the y (or x) range where NO blockage was recorded.
+        Returns a short hint like "Wall at x≈0 blocked at y=-1.0,-0.5,0.0,0.5.
+        Try crossing at y≈1.0 (no blockage recorded there)."
+        """
+        import re
+
+        # Collect all blocked positions: current mission + wall notes.
+        blocked: list[tuple[float, float]] = []
+
+        # From current mission clamped advances.
+        for r in ctx.recent_steps:
+            if r["result_status"] == "clamped" and r["action_kind"] in ("advance", "approach"):
+                blocked.append((r["pose_x"], r["pose_y"]))
+
+        # From memory wall notes — parse coordinates.
+        for note in ctx.recalled:
+            if note.get("kind") != "wall":
+                continue
+            text = note.get("text", "")
+            pairs = re.findall(r"\((-?\d+\.?\d*),\s*(-?\d+\.?\d*)\)", text)
+            for xs, ys in pairs:
+                try:
+                    blocked.append((float(xs), float(ys)))
+                except ValueError:
+                    pass
+
+        if len(blocked) < 2:
+            return "none"
+
+        # Cluster blocked x-positions to find vertical walls.
+        xs_rounded = [round(x * 2) / 2 for x, _ in blocked]
+        from collections import Counter
+
+        x_counts = Counter(xs_rounded)
+
+        hints: list[str] = []
+        for wall_x, count in x_counts.most_common(3):
+            if count < 3 or abs(wall_x) > 2.0:
+                continue
+            # This is a real wall. Find which y-values are blocked.
+            blocked_ys = sorted(
+                {round(y * 2) / 2 for x, y in blocked if abs(round(x * 2) / 2 - wall_x) < 0.3}
+            )
+            if len(blocked_ys) < 2:
+                continue
+            # Find y-values NOT blocked (probe range -2.0 to 2.0 in 0.5 steps).
+            all_ys = [y / 2 for y in range(-4, 5)]  # -2.0 to 2.0
+            open_ys = [y for y in all_ys if not any(abs(y - by) < 0.4 for by in blocked_ys)]
+            if open_ys:
+                blocked_str = ",".join(f"{y:.1f}" for y in blocked_ys)
+                best = min(open_ys, key=abs)  # prefer gap closest to center
+                hints.append(
+                    f"Wall at x≈{wall_x:.1f} blocked at y={blocked_str}. "
+                    f"Try crossing at y≈{best:.1f} (no blockage there)."
+                )
+
+        return " | ".join(hints) if hints else "none"
+
+    @staticmethod
     def _build_user_message(ctx: PlanContext) -> str:
         dets = ctx.detections
         det_str = (
@@ -373,10 +436,24 @@ class LLMPlanner:
         else:
             memory_str = "none"
 
+        # Real-time gap inference: analyse wall notes + current-mission
+        # clamped positions to find where walls have gaps.
+        gap_hint = LLMPlanner._infer_gaps(ctx)
+
+        # Put gap hint at the top if it's actionable — this is the most
+        # important navigation info and must not be buried.
+        nav_block = ""
+        if gap_hint != "none":
+            nav_block = (
+                f"*** NAVIGATION PRIORITY: {gap_hint} "
+                f"Fly to the suggested y-coordinate FIRST, then advance east. ***\n"
+            )
+
         return (
             f"Target: {ctx.target.label}\n"
             f"Step: {ctx.step}/{ctx.max_steps}\n"
             f"Pose: x={pose.x:.2f} y={pose.y:.2f} z={pose.z:.2f} yaw={pose.yaw_deg:.1f}°\n"
+            f"{nav_block}"
             f"Perception: {det_str}\n"
             f"Observation: {ctx.observation}\n"
             f"Prior knowledge (may be stale):\n{memory_str}\n"

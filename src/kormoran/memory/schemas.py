@@ -37,14 +37,15 @@ class MemoryNote(BaseModel):
 
     kind values:
     - "location"  — where a target was found / not found
+    - "wall"      — where walls/obstacles blocked the drone
     - "strategy"  — what navigation tactic worked / failed
-    - "scene"     — general scene structure (walls, gaps, layout)
+    - "scene"     — general scene structure (gaps, layout)
     """
 
     note_id: str  # UUID
     scene_id: str
     target_label: str
-    kind: Literal["location", "strategy", "scene"]
+    kind: Literal["location", "strategy", "scene", "wall"]
     text: str = Field(..., description="Natural-language note text (used as embedding input)")
     confidence: float = Field(1.0, ge=0.0, le=1.0)
     created_at: str  # ISO-8601 UTC

@@ -207,6 +207,9 @@ def run_mission(
     no_memory: bool = typer.Option(
         False, "--no-memory", help="Disable long-term memory (ablation)"
     ),
+    mission_id_override: str = typer.Option(
+        "", "--mission-id", help="Force a specific mission ID (used by dashboard)"
+    ),
 ) -> None:
     """Run a full LangGraph mission loop in the simulator."""
     import time
@@ -311,7 +314,7 @@ def run_mission(
 
     drone = SimDrone(scenario=scene, gui=gui, seed=seed)
     perceiver = ColorDetector()
-    mission_id = new_mission_id()
+    mission_id = mission_id_override or new_mission_id()
 
     typer.echo(
         f"run-mission: id={mission_id} target={target!r} scenario={scenario}"
@@ -330,6 +333,13 @@ def run_mission(
         if settings.record_missions:
             mission_logger = MissionLogger(log_path)
 
+        # Stop-flag path: the Streamlit dashboard writes this file to request
+        # an emergency stop; check_node will abort the mission when it sees it.
+        from kormoran.ui.stop_flag import clear_stop_flag, stop_flag_path
+
+        sfp = stop_flag_path(settings.data_dir, mission_id)
+        clear_stop_flag(settings.data_dir, mission_id)  # ensure no stale flag
+
         graph = build_mission_graph(
             drone,
             planner,
@@ -339,6 +349,7 @@ def run_mission(
             episodic=episodic_store,
             semantic=semantic_store,
             reflection_llm=reflection_llm,
+            stop_flag_path=sfp,
         )
         initial = make_initial_state(
             mission_id, scene.scene_id, target_spec, drone_state, max_steps
@@ -346,7 +357,17 @@ def run_mission(
 
         t0 = time.monotonic()
         thread_config = {"configurable": {"thread_id": mission_id}}
-        final_state = graph.invoke(initial, config=thread_config)
+        try:
+            final_state = graph.invoke(initial, config=thread_config)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Mission %s crashed: %s", mission_id, exc)
+            elapsed = time.monotonic() - t0
+            typer.echo(f"\nMission CRASHED in {elapsed:.1f}s: {exc}")
+            typer.echo("  Status   : error")
+            if mission_logger is not None:
+                typer.echo(f"  Log      : {log_path}")
+            drone.disconnect()
+            raise typer.Exit(code=1) from exc
         elapsed = time.monotonic() - t0
 
         status = final_state.get("status", "unknown")
@@ -359,6 +380,36 @@ def run_mission(
         typer.echo(f"  Est. cost: ${usage.get('est_cost_usd', 0.0):.4f}")
 
         if mission_logger is not None:
+            # Log a final entry so the dashboard can infer the outcome.
+            if status == "not_found":
+                last_pose = final_state.get("pose") or {}
+                if not last_pose:
+                    # Fallback: read last pose from the drone
+                    try:
+                        ds = drone.get_state()
+                        last_pose = {
+                            "x": ds.pose.x,
+                            "y": ds.pose.y,
+                            "z": ds.pose.z,
+                            "yaw_deg": ds.pose.yaw_deg,
+                        }
+                    except Exception:  # noqa: BLE001
+                        last_pose = {"x": 0.0, "y": 0.0, "z": 0.0, "yaw_deg": 0.0}
+                mission_logger.log_step(
+                    step=steps + 1,
+                    action={
+                        "kind": "report_not_found",
+                        "distance_m": None,
+                        "angle_deg": None,
+                        "reasoning": "budget exhausted",
+                        "confidence": 1.0,
+                    },
+                    result={"status": "not_found", "pose": last_pose, "elapsed_s": 0.0},
+                    detections=[],
+                    pose=last_pose,
+                    usage=usage,
+                    events=[],
+                )
             typer.echo(f"  Log      : {log_path}")
             if mission_logger.frames:
                 gif_path = Path(settings.data_dir) / "missions" / f"{mission_id}.gif"
@@ -378,6 +429,29 @@ def run_mission(
         except Exception:  # noqa: BLE001, S110
             pass
         drone.disconnect()
+
+
+@app.command(name="dashboard")
+def dashboard(
+    port: int = typer.Option(8501, "--port", help="Streamlit server port"),
+) -> None:
+    """Launch the Streamlit mission dashboard."""
+    import subprocess
+
+    typer.echo(f"Starting Kormoran dashboard on http://localhost:{port}")
+    app_path = Path(__file__).parent / "ui" / "app.py"
+    subprocess.run(  # noqa: S603
+        [
+            sys.executable,
+            "-m",
+            "streamlit",
+            "run",
+            str(app_path),
+            "--server.port",
+            str(port),
+        ],
+        check=False,
+    )
 
 
 # ---------------------------------------------------------------------------

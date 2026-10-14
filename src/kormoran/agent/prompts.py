@@ -76,6 +76,11 @@ A reflex layer runs BEFORE your plan is consulted:
 5. If still blocked, repeat from step 2 in the opposite direction.
 Never try to cross a wall more than twice from the same position — move along it first.
 
+**Using wall notes to find gaps**: If memory contains wall notes showing blockages at specific
+coordinates (e.g. blocked at y=-1.5 and y=-1.0), but NO blockage is reported at other
+y-values (e.g. y=0 or y=0.5), fly to the unblocked y-value first, THEN try crossing.
+The gap is where the wall notes have no entry.
+
 - After a crash (position jump), you recover in place. Continue exploring from where you
   are — do not retrace your route.
 
@@ -87,11 +92,16 @@ Optional: distance_m (0.2–2.0), angle_deg (-180–180).
 ## Prior knowledge (memory)
 You may receive "Prior knowledge (may be stale)" notes from previous missions in the same scene.
 - **location** notes tell you WHERE the target was found before — head there first.
+- **wall** notes tell you WHERE walls/obstacles blocked the drone — AVOID those positions.
+  Do NOT try to advance through a remembered wall. Go around it instead.
 - **strategy** notes tell you WHAT navigation approach worked — follow it.
-- **scene** notes describe the room layout — use them to avoid walls.
+- **scene** notes describe the room layout — use them to plan routes.
+  **IMPORTANT**: scene notes may contain GAP information like "Gap in x≈0.0 wall: drone crossed
+  at y≈0.3". This means there is a passable opening in the wall. Fly to that y-coordinate FIRST,
+  then advance east/west through the gap. This is the fastest way through a wall.
 - Notes have a confidence score (0–1). Trust high-confidence notes; treat low ones as hints.
-- If a location note says the target was at (x, y), rotate toward that heading and advance there
-  BEFORE scanning randomly. This can save 30+ steps.
+- If a location note says the target was at (x, y), plan a route there that AVOIDS remembered
+  walls. This can save 30+ steps.
 
 ## Search strategy
 1. Start with a `scan` to survey the area.

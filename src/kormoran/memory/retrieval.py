@@ -1,12 +1,11 @@
 """Memory retrieval and staleness helpers (M5).
 
 ``retrieve_for_context`` fetches relevant notes from the SemanticStore
-and formats them as a list of plain dicts that can be stored in
-MissionState.recalled (and serialised to JSON).
+and formats them as a list of plain dicts for MissionState.recalled.
 
-``mark_stale_if_contradicted`` checks the recalled notes against a current
-observation — if the drone is near a location note's claimed position but
-sees no detection, confidence is halved.
+``mark_stale_if_contradicted`` halves confidence of location notes that
+are contradicted by the current observation (drone near claimed position
+but no detection visible).
 """
 
 from __future__ import annotations
@@ -84,36 +83,6 @@ def mark_stale_if_contradicted(
                 "Halving confidence of note %s (drone near claimed location, no detection)", note_id
             )
             store.halve_confidence(note_id)
-
-
-def supersede_not_found_notes(
-    store: SemanticStore,
-    scene_id: str,
-    target_label: str,
-    found_mission_id: str,
-) -> int:
-    """Halve confidence of notes from prior missions that ended 'not_found'.
-
-    Called after a successful find so that stale "not found" notes don't
-    drown out the new, accurate location information.
-
-    Returns the number of notes whose confidence was halved.
-    """
-    notes = store.list_notes(scene_id=scene_id, target_label=target_label)
-    count = 0
-    for note in notes:
-        # Skip notes from the current (successful) mission.
-        if note.get("mission_id") == found_mission_id:
-            continue
-        # Only demote notes whose text suggests a negative observation.
-        text_lower = note.get("text", "").lower()
-        if any(kw in text_lower for kw in ("not found", "did not", "was not", "no ", "failed")):
-            note_id = note.get("note_id", "")
-            if note_id:
-                store.halve_confidence(note_id)
-                count += 1
-                logger.debug("supersede: halved confidence of note %s", note_id)
-    return count
 
 
 def _extract_coords(text: str) -> tuple[float, float] | None:

@@ -56,6 +56,7 @@ def build_mission_graph(
     episodic: EpisodicStore | None = None,
     semantic: SemanticStore | None = None,
     reflection_llm: object | None = None,
+    stop_flag_path: object | None = None,
 ) -> CompiledStateGraph:
     """Compile and return the LangGraph mission graph.
 
@@ -80,6 +81,10 @@ def build_mission_graph(
     reflection_llm:
         LangChain LLM used to generate post-mission MemoryNotes; None skips
         LLM reflection (episodic record still stored if *episodic* is set).
+    stop_flag_path:
+        Optional path to an emergency-stop sentinel file written by the
+        Streamlit dashboard.  When the file exists, check_node aborts the
+        mission immediately.
     """
     from kormoran.control.executor import SkillExecutor
 
@@ -92,7 +97,7 @@ def build_mission_graph(
     builder.add_node("plan", make_plan_node(planner, config))
     builder.add_node("validate", make_validate_node(config))
     builder.add_node("act", make_act_node(executor, perceiver, mission_logger))
-    builder.add_node("check", make_check_node())
+    builder.add_node("check", make_check_node(stop_flag_path=stop_flag_path))
     builder.add_node(
         "reflect_and_store",
         make_reflect_node(episodic=episodic, semantic=semantic, llm=reflection_llm),

@@ -8,7 +8,6 @@ the only place that knows about backends.
 from __future__ import annotations
 
 import logging
-import math
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -85,60 +84,75 @@ def _detect_walls(
     return walls
 
 
-def _wall_avoidance_guardrail(
-    action: Action,
-    recent_steps: list[StepRecord],
-    drone_state: DroneState,
-) -> Action:
-    """Override an advance that would head into a known wall.
+def _is_stuck(recent_steps: list[StepRecord], window: int = 12, radius: float = 0.5) -> bool:
+    """Return True if the drone hasn't moved more than *radius* m in *window* steps."""
+    if len(recent_steps) < window:
+        return False
+    tail = recent_steps[-window:]
+    xs = [r["pose_x"] for r in tail]
+    ys = [r["pose_y"] for r in tail]
+    dx = max(xs) - min(xs)
+    dy = max(ys) - min(ys)
+    return dx < radius and dy < radius
 
-    If the drone's heading points toward a detected wall (within ±45°),
-    redirect to advance parallel to the wall instead.
+
+def _detect_gaps(
+    steps: list[StepRecord],
+    cluster_tol: float = 0.3,
+) -> list[tuple[str, float, float]]:
+    """Detect gaps in walls the drone successfully crossed.
+
+    Uses a stricter wall detection (min_hits=3) and filters out geofence
+    boundaries to avoid false positives.  Only interior walls matter.
+
+    Returns list of (axis, wall_value, gap_coordinate) tuples.
+    E.g. ("x", 0.0, 0.3) means the wall is at x≈0 and the drone
+    crossed it at y≈0.3.
     """
-    walls = _detect_walls(recent_steps)
+    # Stricter: require 3+ hits to be considered a real wall.
+    walls = _detect_walls(steps, cluster_tol=cluster_tol, min_hits=3)
     if not walls:
-        return action
+        return []
 
-    yaw_rad = math.radians(drone_state.pose.yaw_deg)
-    dx = math.cos(yaw_rad)
-    dy = math.sin(yaw_rad)
-    px, py = drone_state.pose.x, drone_state.pose.y
+    # Filter out geofence boundaries (not real indoor walls).
+    interior_walls = [
+        (axis, val)
+        for axis, val in walls
+        if (axis == "x" and -2.0 < val < 2.0) or (axis == "y" and -1.5 < val < 1.5)
+    ]
+    if not interior_walls:
+        return []
 
-    for axis, val in walls:
-        if axis == "x":
-            # Vertical wall at x=val — blocked if heading toward it
-            if abs(px - val) < 1.5 and dx * (val - px) > 0.3:
-                # Heading toward the wall.  Redirect parallel (along y).
-                parallel_angle = 90.0 if dy >= 0 else -90.0
-                logger.info(
-                    "plan_node guardrail: advance blocked by wall at x≈%.1f "
-                    "→ rotating %.0f° to fly parallel",
-                    val,
-                    parallel_angle,
-                )
-                return Action(
-                    kind="rotate",
-                    angle_deg=parallel_angle - drone_state.pose.yaw_deg,
-                    reasoning=f"guardrail: wall at x≈{val:.1f} — rotating to fly parallel",
-                    confidence=1.0,
-                )
-        elif axis == "y":
-            if abs(py - val) < 1.5 and dy * (val - py) > 0.3:
-                parallel_angle = 0.0 if dx >= 0 else 180.0
-                logger.info(
-                    "plan_node guardrail: advance blocked by wall at y≈%.1f "
-                    "→ rotating %.0f° to fly parallel",
-                    val,
-                    parallel_angle,
-                )
-                return Action(
-                    kind="rotate",
-                    angle_deg=parallel_angle - drone_state.pose.yaw_deg,
-                    reasoning=f"guardrail: wall at y≈{val:.1f} — rotating to fly parallel",
-                    confidence=1.0,
-                )
+    # Find successful advances (not clamped, not takeoff/scan/rotate).
+    advances = [
+        r for r in steps if r["action_kind"] == "advance" and r["result_status"] == "reached"
+    ]
 
-    return action
+    gaps: list[tuple[str, float, float]] = []
+    seen: set[tuple[str, float]] = set()
+
+    for axis, val in interior_walls:
+        for i, adv in enumerate(advances):
+            if i == 0:
+                continue
+            prev = advances[i - 1]
+            if axis == "x":
+                # Crossed the wall if prev_x and curr_x are on opposite sides.
+                if (prev["pose_x"] - val) * (adv["pose_x"] - val) < 0:
+                    gap_y = round(adv["pose_y"] * 2) / 2
+                    key = (axis, gap_y)
+                    if key not in seen:
+                        seen.add(key)
+                        gaps.append(("x", val, gap_y))
+            elif axis == "y":
+                if (prev["pose_y"] - val) * (adv["pose_y"] - val) < 0:
+                    gap_x = round(adv["pose_x"] * 2) / 2
+                    key = (axis, gap_x)
+                    if key not in seen:
+                        seen.add(key)
+                        gaps.append(("y", val, gap_x))
+
+    return gaps
 
 
 def _cell_from_pose(x: float, y: float) -> GridCell:
@@ -344,6 +358,31 @@ def make_plan_node(planner: object, config: Settings) -> Callable[[MissionState]
                 update["consecutive_found"] = max(state.get("consecutive_found", 0), 1)
             return update
 
+        # ------------------------------------------------------------------
+        # Altitude cap: if the drone drifted above 1.1 m during exploration
+        # (no detection visible), force a descend before anything else.
+        # At z > 1.1 the downward camera angle makes floor-level targets
+        # nearly invisible.
+        # ------------------------------------------------------------------
+        max_explore_z = 1.1
+        if drone_state.pose.z > max_explore_z and not detections:
+            excess = round(drone_state.pose.z - (REFLEX_ALTITUDE_M + 0.3), 2)
+            if excess >= 0.2:
+                logger.info(
+                    "plan_node: z=%.2f > %.1f with no detection → descending %.2fm",
+                    drone_state.pose.z,
+                    max_explore_z,
+                    excess,
+                )
+                return {
+                    "last_action": Action(
+                        kind="descend",
+                        distance_m=min(excess, 2.0),
+                        reasoning="altitude cap: too high to detect floor targets — descending",
+                        confidence=1.0,
+                    ).model_dump()
+                }
+
         try:
             action: Action = planner.plan(ctx)  # type: ignore[union-attr]
         except StopIteration:
@@ -353,43 +392,132 @@ def make_plan_node(planner: object, config: Settings) -> Callable[[MissionState]
                 confidence=1.0,
             )
 
-        # Guardrail: if the LLM returns rotate but the last action was also
-        # rotate, force movement instead.  LLMs tend to spin in place
-        # indefinitely — this ensures the drone moves after every rotation.
-        # If the last advance was clamped (wall), force a scan instead so
-        # the LLM gets fresh context and can pick a new direction.
-        if action.kind == "rotate":
-            recent = list(state.get("recent_steps", []))
-            last_kind = recent[-1]["action_kind"] if recent else ""
-            if last_kind == "rotate":
-                # Check if recent advances were clamped (stuck at wall).
-                last_advance_clamped = any(
-                    r["action_kind"] == "advance" and r["result_status"] == "clamped"
-                    for r in recent[-5:]
-                )
-                if last_advance_clamped:
-                    logger.info("plan_node guardrail: consecutive rotate near wall → forcing scan")
-                    action = Action(
-                        kind="scan",
-                        reasoning="guardrail: scan to find new direction after wall block",
-                        confidence=1.0,
-                    )
-                else:
-                    logger.info("plan_node guardrail: consecutive rotate → forcing advance 0.5m")
-                    action = Action(
-                        kind="advance",
-                        distance_m=0.5,
-                        reasoning="guardrail: forced advance after consecutive rotate",
-                        confidence=1.0,
-                    )
+        recent = list(state.get("recent_steps", []))
 
-        # Guardrail: prevent advancing into a known wall.
-        # Detect wall positions from clamped advances: if 2+ clamps cluster
-        # near the same x or y value, that's a wall.  If the planned advance
-        # would head toward it, force a parallel-to-wall advance instead.
-        if action.kind == "advance":
-            recent = list(state.get("recent_steps", []))
-            action = _wall_avoidance_guardrail(action, recent, drone_state)
+        # Scan spam guardrail: if 3+ consecutive scans from roughly the
+        # same position, force an advance to move to new ground.
+        if action.kind == "scan":
+            consecutive_scans = 0
+            for r in reversed(recent):
+                if r["action_kind"] == "scan":
+                    consecutive_scans += 1
+                else:
+                    break
+            if consecutive_scans >= 3:
+                logger.info(
+                    "plan_node guardrail: %d consecutive scans → forcing advance 0.8m",
+                    consecutive_scans,
+                )
+                action = Action(
+                    kind="advance",
+                    distance_m=0.8,
+                    reasoning="guardrail: too many scans from same spot — advancing",
+                    confidence=1.0,
+                )
+
+        # Stuck detector: if position hasn't changed in 8 steps, force an
+        # escape toward the least-visited quadrant.  Alternates between
+        # rotate (to face the escape direction) and advance (to move there).
+        # Excludes quadrants that would send the drone into a nearby geofence
+        # boundary (within 0.5 m).
+        # If the same escape direction was tried recently (last 4 stuck
+        # escapes), skip it and try the next-least-visited quadrant.
+        if _is_stuck(recent):
+            visited = list(state.get("visited", []))
+            ne = sum(1 for c in visited if c["x_idx"] >= 0 and c["y_idx"] >= 0)
+            se = sum(1 for c in visited if c["x_idx"] >= 0 and c["y_idx"] < 0)
+            nw = sum(1 for c in visited if c["x_idx"] < 0 and c["y_idx"] >= 0)
+            sw = sum(1 for c in visited if c["x_idx"] < 0 and c["y_idx"] < 0)
+
+            # Filter out quadrants near geofence boundaries.
+            px, py = drone_state.pose.x, drone_state.pose.y
+            margin = 0.5
+            candidates = [("NE", ne), ("SE", se), ("NW", nw), ("SW", sw)]
+            feasible = []
+            for name, count in candidates:
+                bad = False
+                if "E" in name and px > config.geofence_x_max - margin:
+                    bad = True
+                if "W" in name and px < config.geofence_x_min + margin:
+                    bad = True
+                if "N" in name and py > config.geofence_y_max - margin:
+                    bad = True
+                if "S" in name and py < config.geofence_y_min + margin:
+                    bad = True
+                if not bad:
+                    feasible.append((name, count))
+
+            if not feasible:
+                feasible = candidates
+
+            # Check which escape directions were tried recently and failed
+            # (drone is still stuck after trying them).
+            recent_escapes = [
+                r["reasoning"].split("toward ")[-1].split(" quadrant")[0]
+                for r in recent[-12:]
+                if "stuck escape" in r.get("reasoning", "")
+            ]
+            # Sort by least-visited, then skip recently-tried directions.
+            feasible.sort(key=lambda t: t[1])
+            chosen = feasible[0]  # default: least visited
+            for name, count in feasible:
+                if name not in recent_escapes:
+                    chosen = (name, count)
+                    break
+
+            target_angles = {"NE": 45.0, "SE": -45.0, "NW": 135.0, "SW": -135.0}
+            least = chosen
+            escape_yaw = target_angles[least[0]]
+            delta = escape_yaw - drone_state.pose.yaw_deg
+            while delta > 180:
+                delta -= 360
+            while delta <= -180:
+                delta += 360
+
+            # If already facing the right way (within 20°), advance.
+            if abs(delta) < 20:
+                logger.info("plan_node: STUCK → advancing 1.0m toward %s", least[0])
+                action = Action(
+                    kind="advance",
+                    distance_m=1.0,
+                    reasoning=f"stuck escape: advancing toward {least[0]} quadrant",
+                    confidence=1.0,
+                )
+            else:
+                logger.info(
+                    "plan_node: STUCK for 8+ steps → escaping toward %s (rotate %.0f°)",
+                    least[0],
+                    delta,
+                )
+                action = Action(
+                    kind="rotate",
+                    angle_deg=delta,
+                    reasoning=f"stuck escape: rotating toward {least[0]} quadrant",
+                    confidence=1.0,
+                )
+            return {"last_action": action.model_dump()}
+
+        # Guardrail: if the LLM returns 3+ consecutive rotates, force
+        # movement.  Allows rotate→rotate (genuine navigation) but prevents
+        # infinite spin.  Only fires after the 3rd consecutive rotate.
+        if action.kind == "rotate":
+            consecutive_rotates = 0
+            for r in reversed(recent):
+                if r["action_kind"] == "rotate":
+                    consecutive_rotates += 1
+                else:
+                    break
+            if consecutive_rotates >= 2:
+                logger.info(
+                    "plan_node guardrail: %d consecutive rotates → forcing advance 0.8m",
+                    consecutive_rotates + 1,
+                )
+                action = Action(
+                    kind="advance",
+                    distance_m=0.8,
+                    reasoning="guardrail: forced advance after 3+ consecutive rotates",
+                    confidence=1.0,
+                )
 
         update: dict = {"last_action": action.model_dump()}
 
@@ -421,7 +549,16 @@ def make_validate_node(config: Settings) -> Callable[[MissionState], dict]:
         if state["last_action"] is None:
             return {}
 
-        action = Action.model_validate(state["last_action"])
+        try:
+            action = Action.model_validate(state["last_action"])
+        except Exception:  # noqa: BLE001
+            # Malformed action from LLM — replace with a safe scan.
+            logger.warning("validate_node: invalid Action dict — falling back to scan")
+            action = Action(
+                kind="scan",
+                reasoning="fallback: previous action was malformed",
+                confidence=0.3,
+            )
         drone_state = DroneState.model_validate(state["drone"])
         verdict = sup.check(action, drone_state, config)
 
@@ -561,8 +698,28 @@ def make_act_node(
 # ---------------------------------------------------------------------------
 
 
-def make_check_node() -> Callable[[MissionState], dict]:
+def make_check_node(
+    stop_flag_path: object | None = None,
+) -> Callable[[MissionState], dict]:
+    """Return the check node.
+
+    Parameters
+    ----------
+    stop_flag_path:
+        Optional ``pathlib.Path`` to a sentinel file written by the
+        Streamlit dashboard's Emergency Stop button.  When the file exists
+        the mission is aborted gracefully (→ ``reflect_and_store``).
+    """
+
     def check_node(state: MissionState) -> dict:
+        # Emergency stop: UI wrote the sentinel file → abort cleanly.
+        if stop_flag_path is not None:
+            from pathlib import Path
+
+            if Path(stop_flag_path).exists():
+                logger.warning("check_node: emergency stop flag detected — aborting mission")
+                return {"status": "aborted"}
+
         step = state["step"]
         max_steps = state["max_steps"]
         last_action = state.get("last_action") or {}
@@ -768,28 +925,101 @@ def make_reflect_node(
 
         if semantic is not None and llm is not None:
             from kormoran.memory.reflection import reflect
-            from kormoran.memory.retrieval import supersede_not_found_notes
 
-            notes = reflect(record, llm)
+            # Extract wall hit positions from clamped advances.
+            wall_hits = [
+                {"x": r["pose_x"], "y": r["pose_y"]}
+                for r in state["recent_steps"]
+                if r["result_status"] == "clamped" and r["action_kind"] in ("advance", "approach")
+            ]
+
+            # Deterministic gap detection: if the drone successfully crossed
+            # a coordinate where it was previously clamped, record the
+            # crossing position as a "scene" note so future missions know
+            # where the gap is.  No LLM call needed.
+            gaps = _detect_gaps(list(state["recent_steps"]))
+            if gaps and semantic is not None:
+                import uuid as _uuid
+
+                from kormoran.memory.schemas import MemoryNote
+
+                now_gap = datetime.now(UTC).isoformat()
+                for axis, cross_val, gap_coord in gaps:
+                    other = "y" if axis == "x" else "x"
+                    text = (
+                        f"Gap in {axis}≈{cross_val:.1f} wall: "
+                        f"drone crossed at {other}≈{gap_coord:.1f}."
+                    )
+                    gap_note = MemoryNote(
+                        note_id=str(_uuid.uuid4()),
+                        scene_id=state["scene_id"],
+                        target_label=target.label,
+                        kind="scene",
+                        text=text,
+                        confidence=0.95,
+                        created_at=now_gap,
+                        mission_id=state["mission_id"],
+                    )
+                    try:
+                        semantic.store(gap_note)
+                        logger.info("reflect_node: gap note stored: %s", text)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("reflect_node: gap note store failed: %s", exc)
+
+            notes = reflect(record, llm, wall_hits=wall_hits)
+
+            # After a successful find, wipe ALL prior notes for this
+            # scene+target.  The current mission's notes are fresher and
+            # more accurate — old notes cause memory pollution that
+            # confuses the LLM in later runs.
+            if outcome == "found":
+                old_notes = semantic.list_notes(
+                    scene_id=record.scene_id,
+                    target_label=record.target_label,
+                )
+                # Only wipe target-specific notes (location, strategy).
+                # Keep wall and scene (gap) notes — they describe the room
+                # layout and are shared across all targets in the same scene.
+                old_ids = [
+                    n["note_id"]
+                    for n in old_notes
+                    if n.get("mission_id") != record.mission_id
+                    and n.get("kind") not in ("wall", "scene")
+                ]
+                if old_ids:
+                    try:
+                        semantic._col.delete(ids=old_ids)  # noqa: SLF001
+                        logger.info(
+                            "reflect_node: wiped %d old target-specific notes after find",
+                            len(old_ids),
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("reflect_node: old note wipe failed: %s", exc)
+
+            # Deduplicate: if a note with the same kind already exists
+            # for this scene+target, replace it instead of adding another.
+            existing = semantic.list_notes(
+                scene_id=record.scene_id,
+                target_label=record.target_label,
+            )
+            existing_by_kind: dict[str, str] = {}
+            for e in existing:
+                kind = e.get("kind", "")
+                if kind not in existing_by_kind:
+                    existing_by_kind[kind] = e["note_id"]
+
             for note in notes:
+                # If a note of this kind already exists, reuse its ID
+                # so the upsert replaces it instead of adding a duplicate.
+                if note.kind in existing_by_kind:
+                    note = note.model_copy(update={"note_id": existing_by_kind[note.kind]})
+                    existing_by_kind.pop(note.kind)  # only replace first match
                 try:
                     semantic.store(note)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("reflect_node: semantic store failed for note: %s", exc)
             if notes:
-                logger.info("reflect_node: %d memory notes stored", len(notes))
-
-            # After a successful find, demote prior "not_found" notes so
-            # they don't pollute future retrievals.
-            if outcome == "found":
-                n_demoted = supersede_not_found_notes(
-                    semantic,
-                    scene_id=record.scene_id,
-                    target_label=record.target_label,
-                    found_mission_id=record.mission_id,
-                )
-                if n_demoted:
-                    logger.info("reflect_node: demoted %d stale not-found notes", n_demoted)
+                logger.info("reflect_node: %d memory notes stored (deduped)", len(notes))
 
             # Prune to keep only the top notes per scene+target.
             n_pruned = semantic.prune(

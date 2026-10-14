@@ -119,8 +119,13 @@ class SemanticStore:
             recency = math.exp(-age_days / 30.0)
             score = similarity * recency * confidence
 
-            # Filter by target_label post-query (ChromaDB where only supports one key)
-            if meta.get("target_label") != target_label:
+            # Filter by target_label post-query (ChromaDB where only supports one key).
+            # Scene (gap) notes describe proven passages and are shared across
+            # all targets in the same scene.  Wall notes are NOT shared — a
+            # wall hit from one target's approach angle can block another
+            # target's gap.  Location and strategy notes are target-specific.
+            note_kind = meta.get("kind", "")
+            if note_kind != "scene" and meta.get("target_label") != target_label:
                 continue
 
             ranked.append(
