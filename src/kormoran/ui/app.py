@@ -215,6 +215,13 @@ _init_state()
 # Tab layout
 # ---------------------------------------------------------------------------
 
+st.title("Kormoran: An AI Autonomous Drone Agent")
+st.caption(
+    "An LLM-driven drone that searches for objects in 3D simulation. "
+    "It perceives through a camera, plans with an LLM, and learns across missions "
+    "using long-term memory — all supervised by an independent safety system."
+)
+
 tab_mission, tab_live, tab_analytics, tab_memory, tab_eval = st.tabs(
     ["Mission Control", "Live Feed", "Analytics", "Memory", "Eval"]
 )
@@ -224,7 +231,7 @@ tab_mission, tab_live, tab_analytics, tab_memory, tab_eval = st.tabs(
 # ===========================================================================
 
 with tab_mission:
-    st.header("Mission Control")
+    # Tab label is the header — no need to repeat it
 
     # ------------------------------------------------------------------
     # Mission form
@@ -368,7 +375,7 @@ with tab_mission:
 # ===========================================================================
 
 with tab_live:
-    st.header("Live Feed")
+    # Tab label is the header
 
     logs = _list_mission_logs()
 
@@ -409,7 +416,7 @@ with tab_live:
 # ===========================================================================
 
 with tab_analytics:
-    st.header("Mission Analytics")
+    # Tab label is the header
 
     from kormoran.ui.log_reader import cumulative_usage, latest_status_from_log, read_log
 
@@ -712,7 +719,7 @@ with tab_analytics:
 # ===========================================================================
 
 with tab_memory:
-    st.header("Memory Browser")
+    # Tab label is the header
 
     col_ep, col_sem = st.columns(2)
 
@@ -796,7 +803,7 @@ with tab_memory:
 # ===========================================================================
 
 with tab_eval:
-    st.header("Evaluation Results")
+    # Tab label is the header
     eval_path = Path("docs/eval_results.md")
     if eval_path.exists():
         st.markdown(eval_path.read_text())
