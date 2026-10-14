@@ -356,7 +356,7 @@ Build:
 - Stretch if time: `perception/vlm_detector.py` (vision model via OpenRouter, `Perceiver`-conformant, injection-hardened: VLM output is parsed into `Detection` only, never into free text that reaches the planner) → enables "blue chair".
 
 Definition of Done:
-- [ ] Rubric self-check table in `docs/presentation.md` (Outcome, Learning Application, Ethics, Presentation, Showcase) each pointing at evidence.
+- [x] Rubric self-check table in `docs/presentation.md` (Outcome, Learning Application, Ethics, Presentation, Showcase) each pointing at evidence.
 - [ ] Fresh-clone test: a new machine follows the README and runs a mission in < 15 min.
 - [ ] Showcase entry uploaded; link in README.
 

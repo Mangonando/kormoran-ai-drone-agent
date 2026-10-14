@@ -605,3 +605,28 @@ headless, computes aggregate metrics, and generates a Markdown report with plots
 **Consequences:** `make eval SEEDS=5` runs the full matrix and produces
 `docs/eval_results.md` with embedded plot references.  102/102 unit tests pass
 (21 new eval tests covering scenarios, metrics, report, and runner helpers).
+
+---
+
+## 2026-10-14 — M8: Hardening, docs, submission
+
+**Context:** Final milestone — documentation, security pass, rubric self-check.
+
+**Decisions made:**
+
+- **Dashboard bound to localhost:** Added `--server.address localhost` to the
+  `dashboard` CLI command.  Streamlit defaults to localhost but making it explicit
+  prevents accidental exposure if the default ever changes.
+
+- **Documentation set:** Created `docs/ethics.md` (7 sections: dual use, privacy,
+  safety, honesty, injection, cost, provenance), `docs/architecture.md` (two-loop
+  design, package layout, 5 key decisions), `docs/hardware.md` (Tello path, pre-flight
+  checklist), `docs/presentation.md` (SCR narrative, 6 required points, rubric
+  self-check table with evidence links).
+
+- **README updated:** Added eval summary table, dashboard section, documentation
+  links, and explicit `make eval` command.
+
+**Consequences:** All graded documentation exists and cross-references the codebase.
+The rubric self-check table in `presentation.md` maps every criterion to specific
+files.  102/102 unit tests pass.

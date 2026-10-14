@@ -117,9 +117,32 @@ uv run kormoran memory clear --yes                   # wipe all memory
 
 6. **No SLAM or path planning:** The drone uses LLM reasoning + memory notes, not geometric algorithms. Real autonomous drones use SLAM + A* for navigation. The LLM approach is more flexible but less reliable for spatial tasks.
 
+## Evaluation Summary
+
+38 runs across 3 scenarios, 2 planners (heuristic + LLM), memory on/off. Zero safety violations.
+
+| Scenario | Target | Best success rate | Mean steps (best) |
+|----------|--------|------------------|-------------------|
+| apartment_v1 | blue sphere | 100% (all configs) | 5–8 |
+| apartment_v1 | yellow cylinder | 50% (both planners) | 7–19 |
+| apartment_v1 | red cube | 0% (needs >30 steps) | — |
+| absent_target | red cube | 100% (heuristic) | 11–16 |
+
+Full results: [docs/eval_results.md](docs/eval_results.md). Reproduce with `make eval SEEDS=5`.
+
 ## Architecture
 
-See [ROADMAP.md](ROADMAP.md) for the full two-loop design, package layout, and milestone plan.
+Two-loop design: LLM outer loop (LangGraph) + deterministic PID inner loop (PyBullet).
+
+See [docs/architecture.md](docs/architecture.md) for the full package layout, design decisions, and diagrams.
+
+## Dashboard
+
+```bash
+make dashboard   # or: uv run kormoran dashboard
+```
+
+4-tab Streamlit UI: Mission Control (launch + emergency stop), Live Feed (trajectory + reasoning), Memory (episodic + semantic browser), Eval (results viewer).
 
 ## Development
 
@@ -127,8 +150,14 @@ See [ROADMAP.md](ROADMAP.md) for the full two-loop design, package layout, and m
 uv run pre-commit run --all-files   # lint + format
 uv run pytest -m "not llm"          # unit + integration tests (no API key needed)
 uv run pytest -m "llm"              # LLM tests (needs OPENROUTER_API_KEY)
+make eval SEEDS=5                   # full evaluation harness
 ```
 
-## Ethics
+## Documentation
 
-See [docs/ethics.md](docs/ethics.md) *(added in M8)*.
+- [Architecture](docs/architecture.md) — two-loop design, package layout, key decisions
+- [Ethics](docs/ethics.md) — dual use, privacy, safety, honesty, injection, cost, provenance
+- [Hardware](docs/hardware.md) — DJI Tello path (M9, planned)
+- [Presentation](docs/presentation.md) — SCR narrative, 6 required points, rubric self-check
+- [Evaluation Results](docs/eval_results.md) — full metric tables + plots
+- [Decisions Log](docs/decisions.md) — architectural change log

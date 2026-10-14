@@ -518,6 +518,8 @@ def dashboard(
             str(app_path),
             "--server.port",
             str(port),
+            "--server.address",
+            "localhost",
         ],
         check=False,
     )
