@@ -15,7 +15,10 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
 COPY src/ ./src/
-RUN uv sync --frozen --no-dev
+COPY configs/ ./configs/
+RUN uv sync --frozen --no-dev \
+    && find .venv/lib -path "*/pybullet_data/policies" -type d -exec rm -rf {} + \
+    && find .venv/lib -path "*/pybullet_data/*.ckpt*" -delete 2>/dev/null; true
 
 # ---------- runtime ----------
 FROM python:3.12-slim AS runtime
@@ -27,6 +30,7 @@ WORKDIR /app
 
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/src /app/src
+COPY --from=builder /app/configs /app/configs
 
 # PyBullet headless mode (no display required)
 ENV PYBULLET_EGL=1

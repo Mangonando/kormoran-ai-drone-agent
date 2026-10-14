@@ -535,3 +535,40 @@ no improvement across runs despite memory notes being stored correctly.  Two roo
 **Consequences:** The LLM now sees memory notes and can navigate directly to previously
 found locations.  Low-confidence failure notes are naturally pruned, preventing accumulation
 of misleading context.  Existing unit tests pass (97/97).
+
+---
+
+## 2026-10-12 — M7: Streamlit dashboard architecture
+
+**Context:** M7 requires a live mission dashboard with launch controls, trajectory
+visualization, memory browser, and an emergency stop that works across process boundaries.
+
+**Decisions made:**
+
+- **Subprocess isolation:** The Streamlit UI launches `uv run kormoran run-mission ...` as
+  a child process via `subprocess.Popen`.  The UI only reads JSONL mission logs written by
+  `MissionLogger`; it never imports the agent, simulator, or PyBullet.  This keeps the
+  Streamlit worker crash-safe and avoids GPU/OpenGL conflicts.
+
+- **Emergency stop via sentinel file:** The UI writes `data/stop/<mission_id>.stop`;
+  `check_node` polls for it at the top of each iteration and sets `status="aborted"` when
+  found.  Chosen over signals or queues because the agent runs as a separate OS process with
+  no shared memory; a file is the simplest cross-process channel that survives restarts.
+  `cli.py` calls `clear_stop_flag` before each mission to avoid stale flags.
+
+- **streamlit install via `uv pip install`:** `uv add streamlit` fails because the resolver
+  cannot satisfy pybullet 3.2.7 for the Python 3.14 split.  Workaround:
+  `VIRTUAL_ENV=.venv uv pip install streamlit` installs directly into the project venv
+  without triggering the full resolver.  This is consistent with the existing pybullet
+  patched-wheel workaround.
+
+- **Non-blocking stdout polling:** `launcher.py` uses `select.select` with timeout=0 to
+  read subprocess stdout without blocking the Streamlit event loop.  An auto-refresh
+  (`st.rerun()` after 1.5 s) keeps the UI live while the mission runs.
+
+- **`dashboard` CLI command:** Added `kormoran dashboard` (typer command) which invokes
+  `streamlit run src/kormoran/ui/app.py`, so `make dashboard` continues to work.
+
+**Consequences:** The UI is fully decoupled from the agent process; a crash in either
+does not affect the other.  AppTest smoke tests (81/81) confirm the app renders all four
+tabs, parses fixture JSONL logs correctly, and the sentinel file round-trip works.

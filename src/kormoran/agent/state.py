@@ -15,7 +15,7 @@ from typing import Annotated, TypedDict
 #: peaks at ~0.8 % area_frac around 2 m — it cannot reach 1 % from a
 #: forward-facing camera while targets are at floor level (z=0.1 m).
 #: 0.005 (0.5 %) is the highest reliably achievable value; tighter thresholds
-#: require elevating targets to z=0.5 m (see living_room_v1 TODO in ROADMAP).
+#: require elevating targets to z=0.5 m.
 FOUND_AREA_FRAC: float = 0.005
 
 #: Maximum |center_norm[0]| for a detection to count as centred.

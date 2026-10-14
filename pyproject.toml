@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "kormoran"
 version = "0.1.0"
 description = "LLM-driven drone agent for autonomous object search in simulation"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.14"
 dependencies = [
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
@@ -23,6 +23,7 @@ dependencies = [
     "opencv-python-headless>=4.8",
     "langgraph>=0.2",
     "chromadb",
+    "streamlit",
 ]
 
 [project.scripts]

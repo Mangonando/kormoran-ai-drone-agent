@@ -342,9 +342,9 @@ Build:
 - Eval tab: renders `docs/eval_results.md` plots.
 
 Definition of Done:
-- [ ] `streamlit.testing.v1.AppTest` smoke tests: app loads, panels render from fixture logs, emergency-stop writes the flag.
-- [ ] Integration: a full mission started from the UI completes; stop button lands the drone within one step.
-- [ ] `make dashboard` works locally; `docker compose up` serves the dashboard headless (sim runs `DIRECT`, frames come from the agent's own captures).
+- [x] `streamlit.testing.v1.AppTest` smoke tests: app loads, panels render from fixture logs, emergency-stop writes the flag.
+- [x] Integration: a full mission started from the UI completes; stop button lands the drone within one step.
+- [x] `make dashboard` works locally; `docker compose up` serves the dashboard headless (sim runs `DIRECT`, frames come from the agent's own captures).
 
 ### M8 — Hardening, docs, submission (≈6 h)
 **Goal:** passes the evaluation rubric; safe to put on GitHub and the showcase.

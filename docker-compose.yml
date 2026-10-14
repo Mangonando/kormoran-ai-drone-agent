@@ -7,3 +7,14 @@ services:
       - ./data:/app/data
     # Override for local runs: docker compose run kormoran kormoran run-mission ...
     command: kormoran --help
+
+  dashboard:
+    build: .
+    env_file:
+      - .env
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/app/data
+      - ./configs:/app/configs
+    command: kormoran dashboard --port 8501
