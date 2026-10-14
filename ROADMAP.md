@@ -357,7 +357,7 @@ Build:
 
 Definition of Done:
 - [x] Rubric self-check table in `docs/presentation.md` (Outcome, Learning Application, Ethics, Presentation, Showcase) each pointing at evidence.
-- [ ] Fresh-clone test: a new machine follows the README and runs a mission in < 15 min.
+- [x] Fresh-clone test: a new machine follows the README and runs a mission in < 15 min. ✅ (2026-10-14)
 - [ ] Showcase entry uploaded; link in README.
 
 ### M9 — Hardware adapter: DJI Tello (post-submission, ≈8 h + flight time)

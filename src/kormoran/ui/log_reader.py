@@ -41,7 +41,7 @@ def read_log(log_path: str | Path) -> list[dict]:
 def latest_status_from_log(steps: list[dict]) -> str:
     """Infer the mission status from the last log entry.
 
-    Returns one of: "found", "not_found", "aborted", "running".
+    Returns one of: "found", "not_found", "aborted", "error", "running".
     """
     if not steps:
         return "running"
@@ -54,6 +54,14 @@ def latest_status_from_log(steps: list[dict]) -> str:
     result_status = (last.get("result") or {}).get("status", "")
     if result_status == "aborted":
         return "aborted"
+    # No terminal action recorded — either still running or timed out.
+    # Use a 2-minute threshold: if the log hasn't been written to in
+    # over 2 minutes, the subprocess is dead.
+    import time
+
+    last_ts = last.get("ts", 0)
+    if last_ts and (time.time() - last_ts) > 120:
+        return "error"
     return "running"
 
 

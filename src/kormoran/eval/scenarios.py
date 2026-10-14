@@ -40,6 +40,7 @@ def build_matrix(
     scenarios_dir: str | Path = "configs/scenarios",
     *,
     scenarios: list[str] | None = None,
+    targets: list[str] | None = None,
     seeds: int = DEFAULT_SEEDS,
     planners: list[str] | None = None,
     memory_modes: list[bool] | None = None,
@@ -52,6 +53,8 @@ def build_matrix(
         Path to the directory containing scenario YAML files.
     scenarios:
         Scenario IDs to include.  ``None`` → all YAML files in *scenarios_dir*.
+    targets:
+        Target labels to include.  ``None`` → all targets in each scenario.
     seeds:
         Number of seeds (1 … seeds inclusive).
     planners:
@@ -69,12 +72,16 @@ def build_matrix(
     cases: list[EvalCase] = []
     for scenario in scenarios:
         yaml_path = sdir / f"{scenario}.yaml"
-        targets = _targets_from_yaml(yaml_path) if yaml_path.exists() else []
+        scenario_targets = _targets_from_yaml(yaml_path) if yaml_path.exists() else []
         # For absent_target (no targets), use a synthetic target label
-        if not targets:
-            targets = ["red cube"]
+        if not scenario_targets:
+            scenario_targets = ["red cube"]
 
-        for target in targets:
+        # Filter targets if a whitelist was provided
+        if targets is not None:
+            scenario_targets = [t for t in scenario_targets if t in targets]
+
+        for target in scenario_targets:
             for seed in range(1, seeds + 1):
                 for planner in planner_list:
                     for memory in mem_list:

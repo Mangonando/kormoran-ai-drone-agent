@@ -6,14 +6,31 @@
 
 **How it works:** A LangGraph loop — *recall → perceive → plan → validate → act → check* — lets the model pick the next macro-action (scan, advance, climb, approach…) from what the camera currently shows. A deterministic PID controller flies each action inside gym-pybullet-drones. An independent safety supervisor vetoes any action that would violate geofence, altitude, or battery limits. Long-term memory (SQLite + ChromaDB) lets the agent recall where objects were found across missions, so search gets faster over time.
 
-## Quickstart
+## Quick Run (5 minutes)
+
+```bash
+git clone https://github.com/TuringCollegeSubmissions/jramir-AE.CAP.AFA.1.1.git && cd jramir-AE.CAP.AFA.1.1
+uv sync
+cp .env.example .env
+# Edit .env: OPENROUTER_API_KEY=sk-or-...
+
+# Run a mission — watch the drone find the red cube
+uv run kormoran run-mission --scenario living_room_v1 --target "red cube" --planner llm --seed 1
+
+# Launch the dashboard
+uv run kormoran dashboard
+```
+
+Need `uv`? Install it first: `curl -LsSf https://astral.sh/uv/install.sh | sh`
+
+## Full Setup
 
 ```bash
 # 1. Install uv if you don't have it
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # 2. Clone and set up
-git clone <repo-url> && cd kormoran
+git clone https://github.com/TuringCollegeSubmissions/jramir-AE.CAP.AFA.1.1.git && cd jramir-AE.CAP.AFA.1.1
 uv sync
 uv run pre-commit install
 
@@ -119,14 +136,14 @@ uv run kormoran memory clear --yes                   # wipe all memory
 
 ## Evaluation Summary
 
-38 runs across 3 scenarios, 2 planners (heuristic + LLM), memory on/off. Zero safety violations.
+132 runs across 3 scenarios, 2 planners (heuristic + LLM), memory on/off. **Zero safety violations.** Total cost: $0.26.
 
-| Scenario | Target | Best success rate | Mean steps (best) |
-|----------|--------|------------------|-------------------|
-| apartment_v1 | blue sphere | 100% (all configs) | 5–8 |
-| apartment_v1 | yellow cylinder | 50% (both planners) | 7–19 |
-| apartment_v1 | red cube | 0% (needs >30 steps) | — |
-| absent_target | red cube | 100% (heuristic) | 11–16 |
+| Scenario | Target | Heuristic success | LLM success | Avg steps (found) |
+|----------|--------|-------------------|-------------|-------------------|
+| apartment_v1 | blue sphere | 100% | 100% | 4–8 |
+| apartment_v1 | yellow cylinder | 30% | 65% | 7–27 |
+| apartment_v1 | red cube | 60% | 15% | 21–90 |
+| absent_target | red cube | 100% (correct) | 75% (correct) | — |
 
 Full results: [docs/eval_results.md](docs/eval_results.md). Reproduce with `make eval SEEDS=5`.
 
@@ -143,6 +160,22 @@ make dashboard   # or: uv run kormoran dashboard
 ```
 
 4-tab Streamlit UI: Mission Control (launch + emergency stop), Live Feed (trajectory + reasoning), Memory (episodic + semantic browser), Eval (results viewer).
+
+## Docker
+
+```bash
+# Build the image (multi-stage, non-root)
+make docker-build
+
+# Run a mission headless
+docker run --rm -e OPENROUTER_API_KEY=sk-or-... kormoran \
+  kormoran run-mission --scenario living_room_v1 --target "red cube" --planner heuristic --seed 1
+
+# Run the CLI
+docker run --rm kormoran kormoran --help
+```
+
+Note: The Docker image runs PyBullet in headless `DIRECT` mode (no GUI). Streamlit dashboard is not included in the Docker image — run it locally with `make dashboard`.
 
 ## Development
 

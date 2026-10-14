@@ -188,16 +188,17 @@ class TestAppSmoke:
     def test_app_loads_without_exception(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """App renders all 4 tabs without raising."""
+        """App renders all 5 tabs without raising."""
         at = self._run_app(monkeypatch, tmp_path)
         assert not at.exception, f"App raised: {at.exception}"
 
-    def test_four_tabs_present(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        """All four tab labels are present in the rendered output."""
+    def test_five_tabs_present(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """All five tab labels are present in the rendered output."""
         at = self._run_app(monkeypatch, tmp_path)
         tab_labels = [t.label for t in at.tabs]
         assert "Mission Control" in tab_labels
         assert "Live Feed" in tab_labels
+        assert "Analytics" in tab_labels
         assert "Memory" in tab_labels
         assert "Eval" in tab_labels
 

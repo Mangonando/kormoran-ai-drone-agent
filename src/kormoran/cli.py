@@ -439,6 +439,11 @@ def eval_harness(
         "--scenarios",
         help="Comma-separated scenario IDs (default: all)",
     ),
+    targets: str = typer.Option(
+        "",
+        "--targets",
+        help="Comma-separated target labels (default: all in scenario)",
+    ),
     planners: str = typer.Option(
         "heuristic,llm",
         "--planners",
@@ -465,10 +470,12 @@ def eval_harness(
 
     if not report_only:
         scenario_list = [s.strip() for s in scenarios.split(",") if s.strip()] or None
+        target_list = [t.strip() for t in targets.split(",") if t.strip()] or None
         planner_list = [p.strip() for p in planners.split(",") if p.strip()]
         cases = build_matrix(
             scenarios_dir=settings.scenarios_dir,
             scenarios=scenario_list,
+            targets=target_list,
             seeds=seeds,
             planners=planner_list,
         )
