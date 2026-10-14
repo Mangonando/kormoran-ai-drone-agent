@@ -31,5 +31,8 @@ jobs:
       - name: Unit tests
         run: uv run --frozen pytest -m "not llm and not sim" -v
 
+      - name: Dependency audit (pip-audit)
+        run: uv run --frozen pip-audit --strict
+
       - name: Build Docker image
         run: docker build -t kormoran:ci .
