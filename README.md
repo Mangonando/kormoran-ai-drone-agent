@@ -1,10 +1,21 @@
-# Kormoran
+# Kormoran: An AI Autonomous Drone Agent
 
-**Goal:** An LLM-driven agent that takes a plain-language mission ("find the red cube") and completes it inside a visible 3D quadcopter simulator with no pre-scripted route.
+An LLM-driven drone that searches for objects in 3D simulation. It perceives through a camera, plans with an LLM, and learns across missions using long-term memory — all supervised by an independent safety system.
 
-**Problem it solves:** Traditional drone scripts break the moment the environment changes. A human-controlled drone requires constant attention. Kormoran bridges both: it uses an LLM to make high-level navigation decisions from camera observations, while a deterministic inner loop safely executes each move — so the same code works across different room layouts and target objects.
+[Showcase](https://showcase.turingcollege.com/project/7572ea89-22ec-4343-abe4-0f191e454d95)
+
+![Mission Control](docs/screenshots/mission_control.png)
 
 **How it works:** A LangGraph loop — *recall → perceive → plan → validate → act → check* — lets the model pick the next macro-action (scan, advance, climb, approach…) from what the camera currently shows. A deterministic PID controller flies each action inside gym-pybullet-drones. An independent safety supervisor vetoes any action that would violate geofence, altitude, or battery limits. Long-term memory (SQLite + ChromaDB) lets the agent recall where objects were found across missions, so search gets faster over time.
+
+![Trajectory Map](docs/screenshots/trajectory.png)
+![Mission Replay](docs/screenshots/mission_replay.png)
+
+| | |
+|---|---|
+| ![Analytics](docs/screenshots/analytics.png) | ![Avg Steps](docs/screenshots/avg_steps.png) |
+
+![Reasoning Stream](docs/screenshots/reasoning_stream.png)
 
 ## Quick Run (5 minutes)
 
