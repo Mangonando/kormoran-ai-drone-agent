@@ -83,8 +83,8 @@ class TestScenarios:
             planners=["heuristic"],
             memory_modes=[False],
         )
-        # living_room has 3 targets × 2 seeds × 1 planner × 1 memory = 6
-        assert len(cases) == 6
+        # living_room has 2 targets × 2 seeds × 1 planner × 1 memory = 4
+        assert len(cases) == 4
 
     def test_build_matrix_all_combos(self) -> None:
         from kormoran.eval.scenarios import build_matrix
@@ -95,8 +95,8 @@ class TestScenarios:
             planners=["heuristic", "llm"],
             memory_modes=[True, False],
         )
-        # 3 targets × 1 seed × 2 planners × 2 memory = 12
-        assert len(cases) == 12
+        # 2 targets × 1 seed × 2 planners × 2 memory = 8
+        assert len(cases) == 8
 
     def test_absent_target_uses_synthetic_label(self) -> None:
         from kormoran.eval.scenarios import build_matrix
